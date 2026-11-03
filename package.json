@@ -1,0 +1,36 @@
+{
+  "name": "tide",
+  "version": "0.1.0",
+  "description": "Telegram bot that spots Sui tokens gaining momentum, tracks your trades, and sizes risk from what it remembers on Walrus Memory.",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p .",
+    "typecheck": "tsc -p . --noEmit",
+    "test": "vitest run",
+    "doctor": "tsx src/doctor.ts"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@mysten-incubation/memwal": "^0.1.12",
+    "@mysten/sui": "^2.38.0",
+    "better-sqlite3": "^13.0.3",
+    "dotenv": "^18.0.9",
+    "grammy": "^1.46.0",
+    "node-cron": "^4.6.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.6.6",
+    "@types/node-cron": "^3.0.11",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "vitest": "^5.1.0"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  }
+}
