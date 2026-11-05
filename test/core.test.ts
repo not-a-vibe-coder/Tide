@@ -51,7 +51,7 @@ describe("spike detection", () => {
 
   it("flags a fast price / market cap jump", () => {
     const s = detectSpike(pool({ volumeUsd: { m5: 0, h1: 6_000, h6: 30_000, h24: 120_000 }, priceChangePct: { m5: 0, h1: 25, h6: 0, h24: 0 } }), undefined, NOW);
-    expect(s!.reasons).toEqual(["price and market cap up 25% in 1h"]);
+    expect(s!.reasons).toEqual(["price and market cap are up 25% in an hour"]);
   });
 
   it("ignores thin or quiet pools", () => {

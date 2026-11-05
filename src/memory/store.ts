@@ -330,6 +330,19 @@ export class Store {
       .run(poolAddress, new Date().toISOString());
   }
 
+  recentEvents(userId: number, limit: number): TideEvent[] {
+    const rows = this.db
+      .prepare("SELECT json FROM events WHERE user_id = ? AND type != 'profile_set' ORDER BY at DESC LIMIT ?")
+      .all(userId, limit) as { json: string }[];
+    return rows.map((r) => JSON.parse(r.json) as TideEvent).reverse();
+  }
+
+  recentAlerts(userId: number, limit: number): Alert[] {
+    return (this.db.prepare("SELECT * FROM alerts WHERE user_id = ? ORDER BY sent_at DESC LIMIT ?").all(userId, limit) as any[]).map(
+      toAlert,
+    );
+  }
+
   eventCount(namespace: string): number {
     return (this.db.prepare("SELECT COUNT(*) n FROM events WHERE namespace = ?").get(namespace) as { n: number }).n;
   }

@@ -39,12 +39,12 @@ export function detectSpike(pool: Pool, rules: SpikeRules = DEFAULT_SPIKE_RULES,
   if (volumeMultiple >= rules.minVolumeMultiple) {
     reasons.push(
       Number.isFinite(volumeMultiple)
-        ? `1h volume ${volumeMultiple.toFixed(1)}× its 24h average`
-        : "first hour of trading volume",
+        ? `the last hour traded ${volumeMultiple.toFixed(1)}× its usual volume`
+        : "this is its first hour of real trading",
     );
   }
   if (pool.priceChangePct.h1 >= rules.minPriceChangeH1Pct) {
-    reasons.push(`price and market cap up ${pool.priceChangePct.h1.toFixed(0)}% in 1h`);
+    reasons.push(`price and market cap are up ${pool.priceChangePct.h1.toFixed(0)}% in an hour`);
   }
   if (reasons.length === 0) return null;
 

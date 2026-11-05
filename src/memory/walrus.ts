@@ -4,6 +4,7 @@ import {
   EVENT_TYPES,
   SHARED_NAMESPACE,
   decodeEvent,
+  describe,
   encodeEvent,
   namespaceFor,
   userNamespace,
@@ -98,6 +99,25 @@ export class Memory {
       }
     }
     return [...seen.values()].sort((a, b) => a.at.localeCompare(b.at));
+  }
+
+  /**
+   * Memories about this user that relate to what they just said, via Walrus
+   * semantic recall (like Jasmine: anything past distance 0.8 is unrelated).
+   * Falls back to their most recent local events if Walrus is unavailable.
+   */
+  async recallFor(userId: number, query: string, limit = 6): Promise<string[]> {
+    const line = (e: TideEvent) => `${e.at.slice(0, 10)}: ${describe(e)}`;
+    if (this.client) {
+      try {
+        const res = await this.client.recall({ query, limit, namespace: userNamespace(userId), maxDistance: 0.8 });
+        const events = res.results.map((m) => decodeEvent(m.text)).filter((e): e is TideEvent => e !== null);
+        if (events.length) return events.map(line);
+      } catch (err) {
+        log.debug("recall failed, using local events:", err instanceof Error ? err.message : err);
+      }
+    }
+    return this.store.recentEvents(userId, limit).map(line);
   }
 
   /**

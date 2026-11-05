@@ -28,6 +28,12 @@ const schema = z.object({
   TATUM_SUI_GRPC_URL: z.string().url().default("https://sui-mainnet-grpc.gateway.tatum.io"),
   TATUM_SUI_RPC_URL: z.string().url().default("https://sui-mainnet.gateway.tatum.io"),
 
+  GROQ_API_KEY: z.string().optional().default(""),
+  GEMINI_API_KEY: z.string().optional().default(""),
+  GROQ_MODELS: z.string().optional().default(""),
+  GEMINI_MODELS: z.string().optional().default(""),
+  CREATOR: z.string().default("jack (@jackdotsol)"),
+
   GECKOTERMINAL_BASE_URL: z.string().url().default("https://api.geckoterminal.com/api/v2"),
 
   DATABASE_PATH: z.string().default("./data/tide.db"),

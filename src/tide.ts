@@ -3,7 +3,7 @@ import { SUI_COIN_TYPE, diffBalances, isCash, normaliseCoinType, toUnits } from 
 import { proposeBudget, startOfWeekLagos, suggestSize, trackRecordMultiplier } from "./core/sizing.js";
 import { DEFAULT_SPIKE_RULES, assessRisk, detectSpike, type SpikeRules } from "./core/spike.js";
 import type { SizingResult, Spike, TokenClass } from "./core/types.js";
-import { alertMessage, esc, holdingLine, pct, usd, type HoldingView } from "./bot/format.js";
+import { NO_REASON, alertMessage, esc, holdingLine, pct, usd, type HoldingView } from "./bot/format.js";
 import type { SuiReader } from "./chain/sui.js";
 import { log } from "./log.js";
 import type { Market } from "./market/gecko.js";
@@ -30,6 +30,8 @@ const USDC_PRICE = 1;
 
 export class Tide {
   private notifier: Notifier | null = null;
+  /** First names from Telegram, kept in memory only, used to greet people. */
+  private readonly names = new Map<number, string>();
 
   constructor(
     readonly store: Store,
@@ -41,6 +43,14 @@ export class Tide {
 
   attach(notifier: Notifier) {
     this.notifier = notifier;
+  }
+
+  setName(userId: number, firstName: string | undefined) {
+    if (firstName) this.names.set(userId, firstName);
+  }
+
+  nameOf(userId: number): string | undefined {
+    return this.names.get(userId);
   }
 
   private async notify(chatId: number, html: string, buttons?: Button[][]) {
@@ -135,7 +145,11 @@ export class Tide {
       const quote = await this.market.quote(h.coinType).catch(() => null);
       const pnlPct = quote && h.entryPriceUsd ? (quote.priceUsd / h.entryPriceUsd - 1) * 100 : null;
       this.memory.record(user.id, { type: "position_closed", holdingId: h.id, symbol: h.symbol, priceUsd: quote?.priceUsd ?? null, pnlPct });
-      await this.notify(user.chatId, `Closed <b>${esc(h.symbol)}</b>${pnlPct === null ? "" : ` at ${pct(pnlPct)} from your entry`}. Noted.`);
+      await this.notify(user.chatId, pnlPct === null
+          ? `you're out of <b>${esc(h.symbol)}</b>. noted.`
+          : pnlPct >= 0
+            ? `you closed <b>${esc(h.symbol)}</b> at ${pct(pnlPct)} from your entry. nice one.`
+            : `you closed <b>${esc(h.symbol)}</b> at ${pct(pnlPct)} from your entry. that one stings, but you got out.`);
     }
 
     if (found > 0) await this.askNextReason(user);
@@ -147,10 +161,11 @@ export class Tide {
     const h = this.store.nextPendingReason(user.id);
     if (!h) return false;
     const cost = h.costUsd !== null ? ` for about ${usd(h.costUsd)}` : "";
+    const name = this.names.get(user.id);
     await this.notify(
       user.chatId,
-      `I saw you bought <b>${esc(h.symbol)}</b>${cost}.\nIn one line, <b>why?</b> Reply here and I'll hold you to it.`,
-      [[{ text: "Skip this one", data: `skipreason:${h.id}` }]],
+      `${greet(name)}i saw you picked up <b>${esc(h.symbol)}</b>${cost}.\nwhat made you buy it? one line is enough, i'll hold you to it.`,
+      [[{ text: "skip this one", data: `skipreason:${h.id}` }]],
     );
     return true;
   }
@@ -166,7 +181,7 @@ export class Tide {
   skipReason(userId: number, holdingId: string) {
     const h = this.store.getHolding(holdingId);
     if (!h || h.userId !== userId) return;
-    this.memory.record(userId, { type: "buy_reason", holdingId, symbol: h.symbol, reason: "(no reason given)" });
+    this.memory.record(userId, { type: "buy_reason", holdingId, symbol: h.symbol, reason: NO_REASON });
   }
 
   // ---- spike scanner ----------------------------------------------------
@@ -210,7 +225,7 @@ export class Tide {
     const shared = this.store.sharedWinRate(spike.tokenClass);
     const sharedNote =
       shared.total >= 5
-        ? `Across all Tide users, ${spike.tokenClass} tokens were up 24h after ${shared.wins} of ${shared.total} alerts.`
+        ? `across everyone on tide, ${spike.tokenClass === "new" ? "brand-new pools" : "established tokens"} were up 24h later on ${shared.wins} of ${shared.total} alerts.`
         : null;
     const alertId = randomUUID();
     this.memory.record(user.id, {
@@ -239,14 +254,16 @@ export class Tide {
   /** Record what the user did with an alert. "Not for me" mutes that token class. */
   handleAlertAction(userId: number, alertId: string, action: AlertAction): string {
     const alert = this.store.getAlert(alertId);
-    if (!alert || alert.userId !== userId) return "That alert has expired.";
-    if (alert.action) return `Already noted: ${alert.action.replace(/_/g, " ")}.`;
+    if (!alert || alert.userId !== userId) return "that alert is too old now.";
+    if (alert.action) return `already got it, you ${alert.action.replace(/_/g, " ")}.`;
     this.memory.record(userId, { type: "alert_action", alertId, symbol: alert.symbol, action });
     if (action === "not_for_me") {
       this.memory.record(userId, { type: "preference", key: `mute_${alert.tokenClass}`, value: "true" });
-      return `Got it. I'll stop sending ${alert.tokenClass === "new" ? "brand-new pools" : "established tokens"}. Use /alerts reset to undo.`;
+      return `fair. no more ${alert.tokenClass === "new" ? "brand-new pools" : "established tokens"} from me. /alerts reset brings them back.`;
     }
-    return action === "bought" ? "Noted. I'll check how it did in 24 hours." : "Skipped. I'll still check how it did.";
+    return action === "bought"
+      ? "noted. i'll check on it in 24 hours and tell you how it went."
+      : "skipped. i'll still check how it did, so we both learn.";
   }
 
   unmuteAll(userId: number) {
@@ -288,7 +305,7 @@ export class Tide {
 
   async holdingsReport(userId: number): Promise<string> {
     const holdings = this.store.openHoldings(userId);
-    if (holdings.length === 0) return "No open positions tracked yet. Buy something on Sui and I'll spot it on my next check.";
+    if (holdings.length === 0) return "you're not holding anything i'm tracking yet. buy something on sui and i'll notice on my next check.";
     const views: HoldingView[] = [];
     for (const h of holdings) {
       const q = await this.market.quote(h.coinType).catch(() => null);
@@ -296,13 +313,13 @@ export class Tide {
     }
     // Biggest movers first, either direction.
     views.sort((a, b) => Math.abs(change(b)) - Math.abs(change(a)));
-    return ["<b>Your Sui positions</b>", ...views.map(holdingLine)].join("\n\n");
+    return [`<b>your sui bags</b>`, ...views.map(holdingLine)].join("\n\n");
   }
 
   async sendDigests(): Promise<void> {
     for (const user of this.store.usersWithWallets()) {
       if (this.store.openHoldings(user.id).length === 0) continue;
-      await this.notify(user.chatId, `Morning check-in.\n\n${await this.holdingsReport(user.id)}`);
+      await this.notify(user.chatId, `morning. here's where your bags are.\n\n${await this.holdingsReport(user.id)}`);
     }
   }
 
@@ -312,18 +329,19 @@ export class Tide {
     const stats = this.store.memoryStats(ns);
     const outcomesNew = this.store.outcomes(userId, "new");
     const outcomesEst = this.store.outcomes(userId, "established");
+    const muted = ["new", "established"].filter((c) => this.store.getPref(userId, `mute_${c}`) === "true");
     const lines = [
-      "<b>What I remember about you</b>",
-      `Wallet: ${user?.wallet ? `<code>${user.wallet}</code>` : "not set"}`,
-      `Weekly budget: ${user?.budgetUsd != null ? usd(user.budgetUsd) : "not set"} · base share ${Math.round((user?.baseShare ?? 0.25) * 100)}%`,
-      `Open positions: ${this.store.openHoldings(userId).length}`,
-      `New-token track record: ${record(outcomesNew)} → multiplier ${trackRecordMultiplier(outcomesNew)}`,
-      `Established-token track record: ${record(outcomesEst)} → multiplier ${trackRecordMultiplier(outcomesEst)}`,
-      `Muted: ${["new", "established"].filter((c) => this.store.getPref(userId, `mute_${c}`) === "true").join(", ") || "nothing"}`,
+      "<b>here's what i remember about you</b>",
+      `wallet: ${user?.wallet ? `<code>${user.wallet}</code>` : "you haven't given me one yet"}`,
+      `weekly budget: ${user?.budgetUsd != null ? usd(user.budgetUsd) : "not set"}, ${Math.round((user?.baseShare ?? 0.25) * 100)}% per alert`,
+      `bags i'm watching: ${this.store.openHoldings(userId).length}`,
+      `brand-new pools: ${record(outcomesNew)}, so your multiplier is ${trackRecordMultiplier(outcomesNew)}`,
+      `established tokens: ${record(outcomesEst)}, so your multiplier is ${trackRecordMultiplier(outcomesEst)}`,
+      `muted: ${muted.length ? muted.map((c) => (c === "new" ? "brand-new pools" : "established tokens")).join(", ") : "nothing"}`,
       "",
-      `<b>Walrus Memory</b> (${this.memory.isDryRun ? "dry run" : "Mainnet"}), namespace <code>${ns}</code>`,
-      `${stats.confirmed} stored · ${stats.queued} in flight · ${stats.failed} failed${stats.dry_run ? ` · ${stats.dry_run} dry run` : ""}`,
-      `Shared token memory: ${this.store.eventCount(SHARED_NAMESPACE)} outcomes`,
+      `<b>walrus memory</b> (${this.memory.isDryRun ? "dry run" : "mainnet"}), namespace <code>${ns}</code>`,
+      `${stats.confirmed} stored · ${stats.queued} on the way · ${stats.failed} failed${stats.dry_run ? ` · ${stats.dry_run} dry run` : ""}`,
+      `shared token memory: ${this.store.eventCount(SHARED_NAMESPACE)} outcomes from everyone`,
     ];
     return lines.join("\n");
   }
@@ -334,6 +352,12 @@ function change(v: HoldingView): number {
 }
 
 function record(outcomes: boolean[]): string {
-  if (outcomes.length === 0) return "no resolved alerts yet";
-  return `${outcomes.filter(Boolean).length} up of last ${outcomes.length}`;
+  if (outcomes.length === 0) return "no results yet";
+  const recent = outcomes.slice(-10);
+  return `${recent.filter(Boolean).length} of your last ${recent.length} alerts were up a day later`;
+}
+
+/** "pascal, " — names are lowercased to match the texting voice. */
+function greet(name: string | undefined): string {
+  return name ? `${name.toLowerCase()}, ` : "";
 }

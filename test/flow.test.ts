@@ -69,7 +69,7 @@ describe("Tide end to end", () => {
       { coinType: SCOOP, raw: String(600 * 1e9) },
     ];
     expect(await tide.checkWallet(store.getUser(USER)!)).toBe(1);
-    expect(sent.at(-1)!.html).toContain("why?");
+    expect(sent.at(-1)!.html).toContain("what made you buy it?");
     expect(store.openHoldings(USER)[0]!.costUsd).toBeCloseTo(6);
 
     expect(tide.answerReason(USER, "DEX volume is rising")).toBe("SCOOP");
@@ -111,7 +111,7 @@ describe("Tide end to end", () => {
     const later = sent.at(-1)!.html;
     expect(later).toContain("track record 0.5");
     expect(later).toContain("keep it under <b>$5</b>");
-    expect(later).toContain("established tokens were up 24h after 0 of 6 alerts");
+    expect(later).toContain("established tokens were up 24h later on 0 of 6 alerts");
 
     // "Not for me" mutes the class.
     const alertId = sent.at(-1)!.buttons![0]![2]!.data.split(":")[2]!;

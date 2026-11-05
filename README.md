@@ -14,6 +14,11 @@ Built for the [Walrus × Tatum Total Recall](https://recall-tatum-walrus.vercel.
 4. **Holdings:** `/holdings` and a 9am digest show gain or loss since each buy, next to the reason you gave. If you bought for volume and volume has dropped 30%+, Tide tells you.
 5. **Spike alerts:** every 5 minutes Tide scans trending and new Sui pools. A pool whose last hour is 3× its average hour, or whose price (and market cap) jumped 20%+ in an hour, triggers an alert with a risk check and a suggested max size.
 6. **Feedback:** tap **Bought**, **Skipped** or **Not for me**. 24 hours later Tide records how the token did. That outcome feeds your track record.
+7. **Just talk to it:** ask anything in plain words ("how's scoop doing?", "should i go bigger on this one?", or in pidgin). Tide answers like a friend texting, using your real budget, positions, buy reasons and track record, plus memories recalled from Walrus.
+
+### Voice
+
+Tide talks like [Jasmine](https://github.com/not-a-vibe-coder/Jasmine): lowercase, warm, quietly funny, uses your name, no dashes as pauses, no filler like "great question", and it mirrors your language. Free-text replies go through the same model chain as Jasmine (Groq's Qwen and GPT-OSS, then Gemini Flash) with reasoning hidden. The model only sees numbers Tide has computed or stored, so it can't invent a price, and it never tells anyone to buy or sell. Alerts and reports stay template-based so their numbers are always exact. Without an AI key, everything still works with the built-in messages.
 
 ### The sizing formula
 
@@ -45,9 +50,9 @@ Three learning loops read from it:
 
 **Wipe test:** `/rebuild` (admin only) deletes the local cache and replays every event from Walrus Memory. Budgets, positions, reasons, mutes and track records all come back.
 
-**Tatum Sui gRPC** (`sui-mainnet-grpc.gateway.tatum.io`) reads wallet balances and coin metadata. Sui has deprecated JSON-RPC, so Tide uses gRPC.
+**Tatum Sui gRPC** (`sui-mainnet-grpc.gateway.tatum.io`, native gRPC over HTTP/2) reads wallet balances and coin metadata. If gRPC fails, Tide falls back to Tatum's Sui JSON-RPC.
 
-**GeckoTerminal** (free, no key) provides pool volume, price, market cap and liquidity. Tatum doesn't offer token market data for Sui.
+**GeckoTerminal** (free, no key) provides pool volume, price, market cap and liquidity. Tatum doesn't offer token market data for Sui. Calls are queued, cached for a minute and retried on rate limits.
 
 ## Setup
 
@@ -67,7 +72,9 @@ Fill in `.env`:
 | `TELEGRAM_BOT_TOKEN` | Message [@BotFather](https://t.me/BotFather), `/newbot` |
 | `ADMIN_TELEGRAM_IDS` | Your Telegram user ID (message [@userinfobot](https://t.me/userinfobot)) |
 | `MEMWAL_PRIVATE_KEY`, `MEMWAL_ACCOUNT_ID` | [memory.walrus.xyz/dashboard](https://memory.walrus.xyz/dashboard): create an agent and a delegate key. The delegate's public key is your `MEMWAL_AGENT_ID` for the submission form. |
-| `TATUM_API_KEY` | [dashboard.tatum.io](https://dashboard.tatum.io/) |
+| `TATUM_API_KEY` | [dashboard.tatum.io](https://dashboard.tatum.io/), Sui Mainnet |
+| `GROQ_API_KEY` (optional) | [console.groq.com/keys](https://console.groq.com/keys), free |
+| `GEMINI_API_KEY` (optional) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey), free |
 
 Then check every connection, and start:
 
@@ -112,6 +119,7 @@ src/
   memory/    events, SQLite cache, Walrus Memory client and rebuild
   chain/     Tatum Sui gRPC reader
   market/    GeckoTerminal client
+  ai/        Jasmine-style persona, Groq → Gemini chain, reply cleanup
   bot/       Telegram handlers and message formatting
   tide.ts    the service tying it together
   index.ts   entry point and scheduled jobs

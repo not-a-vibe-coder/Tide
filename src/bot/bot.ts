@@ -1,4 +1,6 @@
 import { Bot, InlineKeyboard, type Context } from "grammy";
+import { toTelegramHtml } from "../ai/clean.js";
+import type { Companion } from "../ai/companion.js";
 import { parseSuiAddress } from "../chain/sui.js";
 import type { CheckResult } from "../checks.js";
 import { log } from "../log.js";
@@ -6,19 +8,22 @@ import type { AlertAction, Button, Notifier, Tide } from "../tide.js";
 import { esc, shortAddress, usd } from "./format.js";
 
 const HELP = [
-  "<b>Tide</b> watches Sui for tokens gaining momentum, tracks your own trades, and learns how much you should risk.",
+  "i'm <b>tide</b>. i watch sui for tokens that start moving, keep track of what you buy and why, and get stricter with you when your calls go bad. you can just talk to me too.",
   "",
-  "/wallet <code>0x…</code> · set the Sui address to track (read-only)",
-  "/budget <code>30</code> · weekly trading budget in USD",
-  "/share <code>25</code> · % of the remaining budget per alert",
-  "/holdings · your positions, P&amp;L, and why you bought",
-  "/check · check your wallet for new buys now",
-  "/scan · scan Sui for spikes now",
-  "/alerts on|off|reset · pause alerts, or unmute token types",
-  "/memory · what I remember about you",
+  "/holdings · your bags, how they're doing, and why you bought",
+  "/scan · look for anything moving on sui right now",
+  "/check · look for new buys in your wallet",
+  "/budget <code>30</code> · how much you're happy to risk a week, in usd",
+  "/share <code>25</code> · what % of what's left i size each alert from",
+  "/alerts on, off or reset · pause me, or unmute token types",
+  "/wallet <code>0x…</code> · change the wallet i watch",
+  "/memory · everything i remember about you",
   "",
-  "Everything you tell me is stored on Walrus Memory. Nothing here is financial advice.",
+  "what you tell me lives on walrus memory. nothing i say is financial advice.",
 ].join("\n");
+
+/** Looks like a question to the bot, not an answer to "why did you buy". */
+const QUESTION = /\?\s*$|^(what|how|why|should|is|are|can|could|do|does|did|when|which|who|where|tell me|show me|abeg|wetin|how far)\b/i;
 
 function keyboard(buttons?: Button[][]): InlineKeyboard | undefined {
   if (!buttons?.length) return undefined;
@@ -30,12 +35,14 @@ function keyboard(buttons?: Button[][]): InlineKeyboard | undefined {
   return kb;
 }
 
-export function createBot(
-  token: string,
-  tide: Tide,
-  adminIds: number[],
-  runDoctor?: (wallet?: string) => Promise<CheckResult[]>,
-): Bot {
+export interface BotOptions {
+  adminIds: number[];
+  runDoctor?: (wallet?: string) => Promise<CheckResult[]>;
+  companion?: Companion;
+}
+
+export function createBot(token: string, tide: Tide, opts: BotOptions): Bot {
+  const { adminIds, runDoctor, companion } = opts;
   const bot = new Bot(token);
   const awaitingBudget = new Set<number>();
 
@@ -53,47 +60,51 @@ export function createBot(
   const reply = (ctx: Context, html: string, buttons?: Button[][]) =>
     ctx.reply(html, { parse_mode: "HTML", reply_markup: keyboard(buttons), link_preview_options: { is_disabled: true } });
 
-  const ensureUser = (ctx: Context) => tide.start(ctx.from!.id, ctx.chat!.id);
+  const ensureUser = (ctx: Context) => {
+    tide.setName(ctx.from!.id, ctx.from!.first_name);
+    return tide.start(ctx.from!.id, ctx.chat!.id);
+  };
+  const hey = (ctx: Context) => (ctx.from?.first_name ? `${esc(ctx.from.first_name.toLowerCase())}, ` : "");
 
   async function saveWallet(ctx: Context, address: string) {
     const userId = ctx.from!.id;
-    await reply(ctx, `Reading <code>${shortAddress(address)}</code> through Tatum…`);
+    await reply(ctx, `one sec, reading <code>${shortAddress(address)}</code>…`);
     try {
       const { liquidUsd, proposedBudget } = await tide.setWallet(userId, address);
       await reply(
         ctx,
         [
-          "Wallet saved. You won't need to send it again.",
-          `You hold about <b>${usd(liquidUsd)}</b> in SUI and USDC.`,
+          `got it, i'll remember this wallet so you never have to send it again.`,
+          `you've got about <b>${usd(liquidUsd)}</b> in sui and usdc.`,
           "",
-          `Set a weekly trading budget of <b>${usd(proposedBudget)}</b>? This caps how much I'll ever suggest per week.`,
+          `how about a weekly trading budget of <b>${usd(proposedBudget)}</b>? i'll never suggest more than that in a week, even when something's flying.`,
         ].join("\n"),
         [
           [
-            { text: `Yes, ${usd(proposedBudget)}`, data: `budget:${proposedBudget}` },
-            { text: "Pick my own", data: "budget:custom" },
+            { text: `yes, ${usd(proposedBudget)}`, data: `budget:${proposedBudget}` },
+            { text: "i'll pick my own", data: "budget:custom" },
           ],
         ],
       );
     } catch (err) {
       log.error("setWallet failed", err);
-      await reply(ctx, "I saved the address but couldn't read its balances right now. I'll try again on the next check.");
+      await reply(ctx, "saved the address, but i couldn't read its balances just now. i'll try again on my next check.");
     }
   }
 
   bot.command("start", async (ctx) => {
     const user = ensureUser(ctx);
     if (user.wallet) {
-      await reply(ctx, `Welcome back. I'm tracking <code>${shortAddress(user.wallet)}</code>.\n\n${HELP}`);
+      await reply(ctx, `${hey(ctx) || "hey, "}welcome back. still watching <code>${shortAddress(user.wallet)}</code> for you.\n\n${HELP}`);
       return;
     }
     await reply(
       ctx,
       [
-        "Hi, I'm <b>Tide</b>.",
-        "I spot Sui tokens picking up volume, track how your own trades are doing, and suggest how much to risk based on your budget and record.",
+        `hey${ctx.from?.first_name ? ` ${esc(ctx.from.first_name.toLowerCase())}` : ""}, i'm <b>tide</b>.`,
+        "i watch sui for tokens that start picking up volume, keep track of what you buy and why, and tell you how much i'd risk based on your own budget and record.",
         "",
-        "Paste your <b>Sui wallet address</b> to begin. I only read public data. I never ask for keys or signatures.",
+        "paste your <b>sui wallet address</b> and we'll start. i only read public data, i'll never ask for keys or signatures.",
       ].join("\n"),
     );
   });
@@ -103,27 +114,27 @@ export function createBot(
   bot.command("wallet", async (ctx) => {
     ensureUser(ctx);
     const address = parseSuiAddress(ctx.match ?? "");
-    if (!address) return reply(ctx, "Send it like this: /wallet <code>0x…</code>");
+    if (!address) return reply(ctx, "send it like this: /wallet <code>0x…</code>");
     await saveWallet(ctx, address);
   });
 
   bot.command("budget", async (ctx) => {
     ensureUser(ctx);
     const amount = Number((ctx.match ?? "").replace(/[$,\s]/g, ""));
-    if (!Number.isFinite(amount) || amount < 0) {
+    if (!Number.isFinite(amount) || amount <= 0 || !(ctx.match ?? "").trim()) {
       awaitingBudget.add(ctx.from!.id);
-      return reply(ctx, "How much per week, in USD? Send a number, like <code>30</code>.");
+      return reply(ctx, "how much are you happy to risk a week, in usd? just the number, like <code>30</code>.");
     }
     tide.setBudget(ctx.from!.id, amount);
-    await reply(ctx, `Weekly budget set to <b>${usd(amount)}</b>.`);
+    await reply(ctx, `done, your weekly budget is <b>${usd(amount)}</b>.`);
   });
 
   bot.command("share", async (ctx) => {
     ensureUser(ctx);
     const p = Number((ctx.match ?? "").replace(/[%\s]/g, ""));
-    if (!Number.isFinite(p) || p < 5 || p > 50) return reply(ctx, "Pick a share between 5 and 50, like /share <code>25</code>.");
+    if (!Number.isFinite(p) || p < 5 || p > 50) return reply(ctx, "pick something between 5 and 50, like /share <code>25</code>.");
     tide.setBaseShare(ctx.from!.id, p / 100);
-    await reply(ctx, `Each alert will now start from <b>${p}%</b> of your remaining weekly budget.`);
+    await reply(ctx, `okay, each alert now starts from <b>${p}%</b> of what's left in your week.`);
   });
 
   bot.command("holdings", async (ctx) => {
@@ -133,33 +144,33 @@ export function createBot(
 
   bot.command("check", async (ctx) => {
     const user = ensureUser(ctx);
-    if (!user.wallet) return reply(ctx, "Set your wallet first with /wallet <code>0x…</code>");
+    if (!user.wallet) return reply(ctx, "i need your wallet first, paste your sui address here.");
     const found = await tide.checkWallet(user).catch((err) => {
       log.error("check failed", err);
       return -1;
     });
-    if (found < 0) return reply(ctx, "Couldn't reach the Sui gateway just now. Try again in a minute.");
-    if (found === 0) await reply(ctx, "No new buys since my last look.");
+    if (found < 0) return reply(ctx, "couldn't reach sui just now. give it a minute and try again.");
+    if (found === 0) await reply(ctx, "nothing new since i last looked.");
   });
 
   bot.command("scan", async (ctx) => {
     ensureUser(ctx);
-    await reply(ctx, "Scanning Sui pools…");
+    await ctx.replyWithChatAction("typing").catch(() => {});
     const n = await tide.scan().catch((err) => {
       log.error("scan failed", err);
       return -1;
     });
-    if (n < 0) await reply(ctx, "Market data is unavailable right now. Try again shortly.");
-    else if (n === 0) await reply(ctx, "Nothing is spiking right now. I'll keep watching.");
+    if (n < 0) await reply(ctx, "the market data is being slow right now. try me again in a bit.");
+    else if (n === 0) await reply(ctx, "nothing's really moving on sui right now. i'll keep an eye out.");
   });
 
   bot.command("alerts", async (ctx) => {
     ensureUser(ctx);
     const arg = (ctx.match ?? "").trim().toLowerCase();
-    if (arg === "off") (tide.setAlerts(ctx.from!.id, false), await reply(ctx, "Alerts paused."));
-    else if (arg === "on") (tide.setAlerts(ctx.from!.id, true), await reply(ctx, "Alerts on."));
-    else if (arg === "reset") (tide.unmuteAll(ctx.from!.id), await reply(ctx, "Unmuted all token types."));
-    else await reply(ctx, "Use /alerts on, /alerts off, or /alerts reset.");
+    if (arg === "off") (tide.setAlerts(ctx.from!.id, false), await reply(ctx, "okay, i'll stay quiet. /alerts on when you want me back."));
+    else if (arg === "on") (tide.setAlerts(ctx.from!.id, true), await reply(ctx, "alerts are back on."));
+    else if (arg === "reset") (tide.unmuteAll(ctx.from!.id), await reply(ctx, "unmuted everything, you'll hear about all token types again."));
+    else await reply(ctx, "use /alerts on, /alerts off or /alerts reset.");
   });
 
   bot.command("memory", async (ctx) => {
@@ -169,27 +180,34 @@ export function createBot(
 
   bot.command("doctor", async (ctx) => {
     if (!adminIds.includes(ctx.from!.id)) {
-      return reply(ctx, `Only the bot admin can run checks. Your Telegram ID is <code>${ctx.from!.id}</code>.`);
+      return reply(ctx, `only the admin can run checks. your telegram id is <code>${ctx.from!.id}</code>.`);
     }
-    if (!runDoctor) return reply(ctx, "Checks aren't available in this build.");
-    await reply(ctx, "Checking Telegram, Tatum, GeckoTerminal and a real Walrus Memory write…");
+    if (!runDoctor) return reply(ctx, "checks aren't available in this build.");
+    await reply(ctx, "checking telegram, tatum, geckoterminal and a real walrus memory write…");
     const user = tide.store.getUser(ctx.from!.id);
     const results = await runDoctor(user?.wallet ?? undefined);
     const lines = results.map((r) => `${r.ok ? "✅" : "❌"} <b>${esc(r.name)}</b>: ${esc(r.detail)}`);
+    if (companion) {
+      const ai = await companion.ping().then(
+        (d) => `✅ <b>AI chat</b>: ${esc(d)}`,
+        (e) => `${companion.enabled ? "❌" : "⚪"} <b>AI chat</b>: ${esc(e instanceof Error ? e.message : String(e))}`,
+      );
+      lines.push(ai);
+    }
     await reply(ctx, lines.join("\n"));
   });
 
   bot.command("rebuild", async (ctx) => {
-    if (!adminIds.includes(ctx.from!.id)) return reply(ctx, "Only the bot admin can run a rebuild.");
-    await reply(ctx, "Wiping the local cache and rebuilding it from Walrus Memory…");
+    if (!adminIds.includes(ctx.from!.id)) return reply(ctx, "only the admin can run a rebuild.");
+    await reply(ctx, "wiping my local memory and rebuilding it from walrus…");
     try {
       const ids = tide.store.usersWithWallets().map((u) => u.id);
       if (!ids.includes(ctx.from!.id)) ids.push(ctx.from!.id);
       const counts = await tide.memory.rebuild(ids);
       const lines = Object.entries(counts).map(([ns, n]) => `<code>${esc(ns)}</code>: ${n} events`);
-      await reply(ctx, ["<b>Rebuilt from Walrus Memory</b>", ...lines].join("\n"));
+      await reply(ctx, ["<b>rebuilt everything from walrus memory</b>", ...lines].join("\n"));
     } catch (err) {
-      await reply(ctx, `Rebuild failed: ${esc(err instanceof Error ? err.message : String(err))}`);
+      await reply(ctx, `rebuild failed: ${esc(err instanceof Error ? err.message : String(err))}`);
     }
   });
 
@@ -207,15 +225,15 @@ export function createBot(
     await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
     if (v === "custom") {
       awaitingBudget.add(ctx.from.id);
-      return reply(ctx, "How much per week, in USD? Send a number, like <code>30</code>.");
+      return reply(ctx, "how much are you happy to risk a week, in usd? just the number, like <code>30</code>.");
     }
     tide.setBudget(ctx.from.id, Number(v));
-    await reply(ctx, `Weekly budget set to <b>${usd(Number(v))}</b>. I'll ping you when something on Sui starts moving.`);
+    await reply(ctx, `done, <b>${usd(Number(v))}</b> a week. i'll ping you when something on sui starts moving.`);
   });
 
   bot.callbackQuery(/^skipreason:(.+)$/, async (ctx) => {
     tide.skipReason(ctx.from.id, ctx.match![1]!);
-    await ctx.answerCallbackQuery({ text: "Skipped" });
+    await ctx.answerCallbackQuery({ text: "skipped" });
     await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
     const user = tide.store.getUser(ctx.from.id);
     if (user) await tide.askNextReason(user);
@@ -228,23 +246,43 @@ export function createBot(
 
     if (awaitingBudget.has(user.id)) {
       const amount = Number(text.replace(/[$,\s]/g, ""));
-      if (!Number.isFinite(amount) || amount < 0) return reply(ctx, "Send just a number, like <code>30</code>.");
+      if (Number.isFinite(amount) && amount > 0) {
+        awaitingBudget.delete(user.id);
+        tide.setBudget(user.id, amount);
+        return reply(ctx, `done, your weekly budget is <b>${usd(amount)}</b>.`);
+      }
+      if (!QUESTION.test(text)) return reply(ctx, "just the number is fine, like <code>30</code>.");
       awaitingBudget.delete(user.id);
-      tide.setBudget(user.id, amount);
-      return reply(ctx, `Weekly budget set to <b>${usd(amount)}</b>.`);
     }
 
     const address = parseSuiAddress(text);
     if (address) return saveWallet(ctx, address);
 
-    const symbol = tide.answerReason(user.id, text);
-    if (symbol) {
-      await reply(ctx, `Saved. I'll check <b>${esc(symbol)}</b> against that reason in your daily updates.`);
-      await tide.askNextReason(user);
-      return;
+    // An unanswered "why did you buy" takes this message, unless it's clearly a question.
+    if (!QUESTION.test(text)) {
+      const symbol = tide.answerReason(user.id, text);
+      if (symbol) {
+        await reply(ctx, `got it. i'll check <b>${esc(symbol)}</b> against that every morning, and tell you if it stops being true.`);
+        await tide.askNextReason(user);
+        return;
+      }
     }
 
-    await reply(ctx, user.wallet ? "Try /holdings, /scan or /help." : "Paste your Sui wallet address to begin.");
+    if (companion?.enabled) {
+      await ctx.replyWithChatAction("typing").catch(() => {});
+      const answer = await companion.reply(user.id, ctx.from.first_name, text).catch((err) => {
+        log.warn("chat failed", err);
+        return null;
+      });
+      if (answer) return reply(ctx, toTelegramHtml(answer));
+    }
+
+    await reply(
+      ctx,
+      user.wallet
+        ? `${hey(ctx)}i'm better with commands right now. try /holdings, /scan or /help.`
+        : "paste your sui wallet address and we'll get started.",
+    );
   });
 
   bot.catch((err) => log.error("bot error", err.error));

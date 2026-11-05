@@ -127,8 +127,19 @@ export class Market {
     return [...byAddress.values()];
   }
 
-  /** Price and activity for a coin, from its most liquid pool. Null if it has no pool. */
+  private readonly quoteCache = new Map<string, { at: number; value: TokenQuote | null }>();
+
+  /** Price and activity for a coin, cached for a minute to spare the rate limit. */
   async quote(coinType: string): Promise<TokenQuote | null> {
+    const key = normaliseCoinType(coinType);
+    const hit = this.quoteCache.get(key);
+    if (hit && Date.now() - hit.at < 60_000) return hit.value;
+    const value = await this.fetchQuote(key);
+    this.quoteCache.set(key, { at: Date.now(), value });
+    return value;
+  }
+
+  private async fetchQuote(coinType: string): Promise<TokenQuote | null> {
     const id = encodeURIComponent(normaliseCoinType(coinType));
     let res: { data: RawPool[] };
     try {

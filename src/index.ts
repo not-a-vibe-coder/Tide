@@ -1,5 +1,7 @@
 import { createServer } from "node:http";
 import cron from "node-cron";
+import { Companion } from "./ai/companion.js";
+import { Llm } from "./ai/llm.js";
 import { createBot } from "./bot/bot.js";
 import { runChecks } from "./checks.js";
 import { SuiReader } from "./chain/sui.js";
@@ -30,7 +32,21 @@ async function main() {
 
   log.info("Walrus Memory:", await memory.health().catch((e) => `unreachable (${e.message})`));
 
-  const bot = createBot(cfg.TELEGRAM_BOT_TOKEN, tide, cfg.ADMIN_TELEGRAM_IDS, (wallet) => runChecks(cfg, wallet, { market }));
+  const list = (v: string) => v.split(",").map((s) => s.trim()).filter(Boolean);
+  const llm = new Llm({
+    groqKey: cfg.GROQ_API_KEY,
+    geminiKey: cfg.GEMINI_API_KEY,
+    groqModels: list(cfg.GROQ_MODELS),
+    geminiModels: list(cfg.GEMINI_MODELS),
+  });
+  const companion = new Companion(llm, store, memory, market, tide, cfg.CREATOR);
+  log.info(`AI chat: ${llm.enabled ? llm.providers.map((p) => `${p.name}/${p.model}`).join(" → ") : "off (templates only)"}`);
+
+  const bot = createBot(cfg.TELEGRAM_BOT_TOKEN, tide, {
+    adminIds: cfg.ADMIN_TELEGRAM_IDS,
+    runDoctor: (wallet) => runChecks(cfg, wallet, { market }),
+    companion,
+  });
   await bot.api.setMyCommands([
     { command: "start", description: "Start or see your status" },
     { command: "holdings", description: "Your positions and P&L" },
