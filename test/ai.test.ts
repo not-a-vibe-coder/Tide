@@ -78,7 +78,8 @@ describe("persona", () => {
     expect(p).toContain("lowercase");
     expect(p).toContain("NO em dashes");
     expect(p).toContain("pidgin");
-    expect(p).toContain("never tell anyone to buy or sell");
+    expect(p).toContain("never \"buy this\" or \"sell now\"");
+    expect(p).toContain("Red flags first");
     expect(p).toContain("Never invent a price");
     expect(p.endsWith("CTX")).toBe(true);
   });
@@ -120,7 +121,7 @@ describe("companion", () => {
     const ctx = seen[0]!;
     expect(ctx).toContain("Their first name: Pascal");
     expect(ctx).toContain("Weekly trading budget: $30");
-    expect(ctx).toContain("SCOOP: bought");
+    expect(ctx).toContain("SCOOP on sui: bought");
     expect(ctx).toContain("+20.0% since their buy");
     expect(ctx).toContain('they bought because "dex volume rising"');
     expect(ctx).toContain("Max size right now: $10 on a lower-risk one, $2.5 on a high-risk one");

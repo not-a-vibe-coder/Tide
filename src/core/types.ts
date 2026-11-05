@@ -1,9 +1,12 @@
+import type { Chain } from "./chains.js";
+
 /** A DEX pool as Tide sees it, normalised from the market data API. */
 export interface Pool {
+  chain: Chain;
   address: string;
   name: string;
   dex: string;
-  /** Sui coin type of the base token, e.g. 0xabc::scoop::SCOOP */
+  /** Base token: a Sui coin type (0xabc::scoop::SCOOP) or a Solana mint address. */
   baseCoinType: string;
   baseSymbol: string;
   priceUsd: number;

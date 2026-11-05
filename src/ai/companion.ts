@@ -1,3 +1,5 @@
+import { CHAIN_LABEL, chainOf } from "../core/chains.js";
+import { assessRisk, classifyToken } from "../core/spike.js";
 import { startOfWeekLagos, trackRecordMultiplier } from "../core/sizing.js";
 import type { TokenClass } from "../core/types.js";
 import { pct, shortAddress, usd } from "../bot/format.js";
@@ -5,6 +7,7 @@ import type { Market } from "../market/gecko.js";
 import type { Store } from "../memory/store.js";
 import type { Memory } from "../memory/walrus.js";
 import { cleanReply } from "./clean.js";
+import { describeToken, extractMentions, pickPool } from "./lookup.js";
 import type { ChatMessage, Llm } from "./llm.js";
 import { systemPrompt } from "./persona.js";
 
@@ -66,16 +69,60 @@ export class Companion {
     this.history.set(userId, h.slice(-HISTORY_TURNS));
   }
 
+  /** Looks up tokens the message names and returns the facts, or what couldn't be found. */
+  async tokenLookups(userId: number, text: string): Promise<string[]> {
+    const known = [
+      ...this.store.openHoldings(userId).map((h) => ({ symbol: h.symbol, token: h.coinType })),
+      ...this.store.recentAlerts(userId, 10).map((a) => ({ symbol: a.symbol, token: a.coinType })),
+    ];
+    const mentions = extractMentions(text, known);
+    if (!mentions.length) return [];
+    const user = this.store.getUser(userId);
+    const out: string[] = ["Token lookups for what they asked about (live from geckoterminal):"];
+    for (const m of mentions) {
+      try {
+        let pool, others = 0;
+        if (m.kind === "token") {
+          pool = (await this.market.tokenPools(m.token))[0] ?? null;
+        } else {
+          ({ best: pool, others } = pickPool(m.query, await this.market.search(m.query)));
+        }
+        if (!pool) {
+          out.push(`- I looked for "${m.kind === "token" ? m.label : m.query}" on sui and solana and found no trading pool. Say so, don't guess.`);
+          continue;
+        }
+        const cls = classifyToken(pool);
+        const extra: string[] = [];
+        if (others > 0) extra.push(`${others} other token(s) also use the ticker ${pool.baseSymbol}; this is the most liquid one, mention that in case they meant another`);
+        const held = this.store.openHoldings(userId).find((h) => h.coinType === pool.baseCoinType);
+        if (held) extra.push(`they hold this, bought ${held.boughtAt.slice(0, 10)}${held.reason ? ` because "${held.reason}"` : ""}`);
+        const shared = this.store.sharedWinRate(cls);
+        if (shared.total >= 3) extra.push(`across all tide users, ${classLabel(cls)} were up 24h after ${shared.wins} of ${shared.total} alerts`);
+        const outcomes = this.store.outcomes(userId, cls);
+        if (outcomes.length) extra.push(`their own record on ${classLabel(cls)}: ${outcomes.slice(-10).filter(Boolean).length} of the last ${Math.min(10, outcomes.length)} up after 24h`);
+        if (user) {
+          const size = this.sizer.sizingFor(user, cls, assessRisk(pool).multiplier);
+          extra.push(size ? `their max size on this one by their own rules: ${usd(size.maxUsd)} (nfa)` : "they have no budget set, so no size");
+        }
+        out.push(describeToken(pool, extra));
+      } catch {
+        out.push(`- The lookup for "${m.kind === "token" ? m.label : m.query}" failed (market data busy). Say you couldn't check it right now.`);
+      }
+    }
+    return out;
+  }
+
   async buildContext(userId: number, firstName: string | undefined, text: string): Promise<string> {
     const user = this.store.getUser(userId);
     const lines: string[] = [];
     lines.push(`Their first name: ${firstName ?? "unknown"}`);
     lines.push(`Today: ${new Date().toISOString().slice(0, 10)} (they're likely on Lagos time)`);
 
-    if (!user?.wallet) {
-      lines.push("They haven't shared a Sui wallet yet. To start, they paste their Sui address in this chat (read-only, no keys).");
+    if (!user?.wallet && !user?.solWallet) {
+      lines.push("They haven't shared a wallet yet. To start, they paste a Sui or Solana address in this chat (read-only, no keys).");
     } else {
-      lines.push(`Wallet: ${shortAddress(user.wallet)}`);
+      if (user.wallet) lines.push(`Sui wallet: ${shortAddress(user.wallet)}`);
+      if (user.solWallet) lines.push(`Solana wallet: ${shortAddress(user.solWallet)}`);
     }
 
     if (user?.budgetUsd != null) {
@@ -83,7 +130,7 @@ export class Companion {
       lines.push(
         `Weekly trading budget: ${usd(user.budgetUsd)}. Spent since Monday: ${usd(spent)}. Left: ${usd(Math.max(0, user.budgetUsd - spent))}. Base share per alert: ${Math.round(user.baseShare * 100)}%.`,
       );
-    } else if (user?.wallet) {
+    } else if (user?.wallet || user?.solWallet) {
       lines.push("No weekly budget set yet (/budget).");
     }
 
@@ -113,9 +160,9 @@ export class Companion {
         const move = q && h.entryPriceUsd ? `${pct((q.priceUsd / h.entryPriceUsd - 1) * 100)} since their buy` : "no live price";
         const value = q ? `, now worth ${usd(q.priceUsd * h.units)}` : "";
         const reason = h.reason ? `, they bought because "${h.reason}"` : ", no reason given yet";
-        lines.push(`- ${h.symbol}: bought ${h.boughtAt.slice(0, 10)} for ${usd(h.costUsd)}, ${move}${value}${reason}`);
+        lines.push(`- ${h.symbol} on ${CHAIN_LABEL[chainOf(h.coinType)]}: bought ${h.boughtAt.slice(0, 10)} for ${usd(h.costUsd)}, ${move}${value}${reason}`);
       }
-    } else if (user?.wallet) {
+    } else if (user?.wallet || user?.solWallet) {
       lines.push("No open positions tracked.");
     }
 
@@ -133,6 +180,8 @@ export class Companion {
       const s = this.store.sharedWinRate(cls);
       if (s.total >= 3) lines.push(`Across all Tide users, ${classLabel(cls)} were up 24h after ${s.wins} of ${s.total} alerts.`);
     }
+
+    lines.push(...(await this.tokenLookups(userId, text)));
 
     const recalled = await this.memory.recallFor(userId, text).catch(() => []);
     if (recalled.length) {

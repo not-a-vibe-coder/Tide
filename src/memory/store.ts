@@ -7,7 +7,9 @@ import { namespaceFor, type TideEvent } from "./events.js";
 export interface User {
   id: number;
   chatId: number;
+  /** Sui wallet. */
   wallet: string | null;
+  solWallet: string | null;
   budgetUsd: number | null;
   baseShare: number;
   alertsOn: boolean;
@@ -96,6 +98,13 @@ export class Store {
     this.db = new Database(path);
     this.db.pragma("journal_mode = WAL");
     this.db.exec(SCHEMA);
+    this.migrate();
+  }
+
+  /** Columns added after the first deploy. */
+  private migrate() {
+    const cols = (this.db.prepare("PRAGMA table_info(users)").all() as { name: string }[]).map((c) => c.name);
+    if (!cols.includes("sol_wallet")) this.db.exec("ALTER TABLE users ADD COLUMN sol_wallet TEXT");
   }
 
   /** Apply an event to the cache. Idempotent: an event already applied is skipped. */
@@ -117,6 +126,7 @@ export class Store {
         const vals: unknown[] = [];
         if (d.chatId !== undefined) (sets.push("chat_id = ?"), vals.push(d.chatId));
         if (d.wallet !== undefined) (sets.push("wallet = ?"), vals.push(d.wallet));
+        if (d.solWallet !== undefined) (sets.push("sol_wallet = ?"), vals.push(d.solWallet));
         if (d.budgetUsd !== undefined) (sets.push("budget_usd = ?"), vals.push(d.budgetUsd));
         if (d.baseShare !== undefined) (sets.push("base_share = ?"), vals.push(d.baseShare));
         if (d.alertsOn !== undefined) (sets.push("alerts_on = ?"), vals.push(d.alertsOn ? 1 : 0));
@@ -210,7 +220,7 @@ export class Store {
   }
 
   usersWithWallets(): User[] {
-    return (this.db.prepare("SELECT * FROM users WHERE wallet IS NOT NULL").all() as any[]).map(toUser);
+    return (this.db.prepare("SELECT * FROM users WHERE wallet IS NOT NULL OR sol_wallet IS NOT NULL").all() as any[]).map(toUser);
   }
 
   usersWithAlerts(): User[] {
@@ -353,6 +363,7 @@ function toUser(r: any): User {
     id: r.id,
     chatId: r.chat_id,
     wallet: r.wallet,
+    solWallet: r.sol_wallet ?? null,
     budgetUsd: r.budget_usd,
     baseShare: r.base_share,
     alertsOn: !!r.alerts_on,

@@ -1,7 +1,7 @@
 import { normaliseCoinType } from "../core/buys.js";
+import { CHAINS, GECKO_NETWORK, chainOf, type Chain } from "../core/chains.js";
 import type { Pool } from "../core/types.js";
 
-const NETWORK = "sui-network";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 interface RawPool {
@@ -10,6 +10,7 @@ interface RawPool {
     address: string;
     name: string;
     base_token_price_usd: string | null;
+    quote_token_price_usd?: string | null;
     fdv_usd: string | null;
     market_cap_usd: string | null;
     reserve_in_usd: string | null;
@@ -20,7 +21,9 @@ interface RawPool {
   };
   relationships?: {
     base_token?: { data?: { id: string } };
+    quote_token?: { data?: { id: string } };
     dex?: { data?: { id: string } };
+    network?: { data?: { id: string } };
   };
 }
 
@@ -30,17 +33,23 @@ const num = (v: string | number | null | undefined): number => {
 };
 const numOrNull = (v: string | null | undefined): number | null => (v === null || v === undefined ? null : num(v));
 
-/** GeckoTerminal ids look like "sui-network_0xabc::mod::SYM". */
+const PREFIX = new RegExp(`^(${Object.values(GECKO_NETWORK).join("|")})_`);
+
+/** GeckoTerminal ids look like "sui-network_0xabc::mod::SYM" or "solana_<mint>". */
 export function coinTypeFromTokenId(id: string): string {
-  const prefix = `${NETWORK}_`;
-  return normaliseCoinType(id.startsWith(prefix) ? id.slice(prefix.length) : id);
+  const bare = id.replace(PREFIX, "");
+  return bare.includes("::") ? normaliseCoinType(bare) : bare;
+}
+
+export function normaliseToken(token: string): string {
+  return token.includes("::") ? normaliseCoinType(token) : token.trim();
 }
 
 export function normalisePool(raw: RawPool): Pool {
   const a = raw.attributes;
-  const baseId = raw.relationships?.base_token?.data?.id ?? "";
-  const coinType = coinTypeFromTokenId(baseId);
+  const coinType = coinTypeFromTokenId(raw.relationships?.base_token?.data?.id ?? "");
   return {
+    chain: chainOf(coinType),
     address: a.address,
     name: a.name,
     dex: raw.relationships?.dex?.data?.id ?? "unknown",
@@ -68,9 +77,13 @@ export interface TokenQuote {
   liquidityUsd: number;
 }
 
-/** Free GeckoTerminal API: no key, rate-limited (~30 calls a minute). */
+/** Free GeckoTerminal API: no key, rate-limited (~30 calls a minute). Covers Sui and Solana. */
 export class Market {
   private lastCall = 0;
+  private queue: Promise<unknown> = Promise.resolve();
+  private readonly quoteCache = new Map<string, { at: number; value: TokenQuote | null }>();
+  private readonly poolsCache = new Map<string, { at: number; value: Pool[] }>();
+  private readonly symbolCache = new Map<string, string | null>();
 
   constructor(
     private readonly baseUrl: string,
@@ -83,8 +96,6 @@ export class Market {
    * A 429 (rate limited) is retried with backoff, honouring Retry-After. Free
    * hosts share outbound IPs, so 429s happen even when Tide itself is polite.
    */
-  private queue: Promise<unknown> = Promise.resolve();
-
   private get<T>(path: string): Promise<T> {
     const run = this.queue.then(() => this.fetchWithRetry<T>(path));
     this.queue = run.catch(() => undefined);
@@ -111,11 +122,12 @@ export class Market {
     }
   }
 
-  /** Trending plus newly created Sui pools, de-duplicated. Works if either list loads. */
-  async candidatePools(): Promise<Pool[]> {
+  /** Trending plus newly created pools on one chain, de-duplicated. Works if either list loads. */
+  async candidatePools(chain: Chain = "sui"): Promise<Pool[]> {
+    const net = GECKO_NETWORK[chain];
     const [trending, fresh] = await Promise.allSettled([
-      this.get<{ data: RawPool[] }>(`/networks/${NETWORK}/trending_pools?page=1&duration=1h`),
-      this.get<{ data: RawPool[] }>(`/networks/${NETWORK}/new_pools?page=1`),
+      this.get<{ data: RawPool[] }>(`/networks/${net}/trending_pools?page=1&duration=1h`),
+      this.get<{ data: RawPool[] }>(`/networks/${net}/new_pools?page=1`),
     ]);
     if (trending.status === "rejected" && fresh.status === "rejected") throw trending.reason;
     const lists = [trending, fresh].flatMap((r) => (r.status === "fulfilled" ? r.value.data : []));
@@ -127,33 +139,60 @@ export class Market {
     return [...byAddress.values()];
   }
 
-  private readonly quoteCache = new Map<string, { at: number; value: TokenQuote | null }>();
-
-  /** Price and activity for a coin, cached for a minute to spare the rate limit. */
-  async quote(coinType: string): Promise<TokenQuote | null> {
-    const key = normaliseCoinType(coinType);
-    const hit = this.quoteCache.get(key);
+  /** Every pool a token trades in, most liquid first. Cached for a minute. */
+  async tokenPools(token: string): Promise<Pool[]> {
+    const key = normaliseToken(token);
+    const hit = this.poolsCache.get(key);
     if (hit && Date.now() - hit.at < 60_000) return hit.value;
-    const value = await this.fetchQuote(key);
-    this.quoteCache.set(key, { at: Date.now(), value });
-    return value;
+    const net = GECKO_NETWORK[chainOf(key)];
+    let pools: Pool[] = [];
+    let raw: RawPool[] = [];
+    try {
+      raw = (await this.get<{ data: RawPool[] }>(`/networks/${net}/tokens/${encodeURIComponent(key)}/pools?page=1`)).data;
+      pools = raw.map(normalisePool).sort((a, b) => b.liquidityUsd - a.liquidityUsd);
+    } catch (err) {
+      if (!(err instanceof Error && err.message.includes(" 404 "))) throw err;
+    }
+    this.poolsCache.set(key, { at: Date.now(), value: pools });
+    // Remember the quote-side price too, for tokens that are only ever the quote in a pool.
+    const best = pools[0];
+    if (best) {
+      const isBase = best.baseCoinType === key;
+      const rawBest = raw.find((r) => r.attributes.address === best.address);
+      const priceUsd = isBase ? best.priceUsd : num(rawBest?.attributes.quote_token_price_usd);
+      this.quoteCache.set(key, { at: Date.now(), value: { priceUsd, volumeH24Usd: best.volumeUsd.h24, liquidityUsd: best.liquidityUsd } });
+      if (isBase) this.symbolCache.set(key, best.baseSymbol);
+    } else {
+      this.quoteCache.set(key, { at: Date.now(), value: null });
+    }
+    return pools;
   }
 
-  private async fetchQuote(coinType: string): Promise<TokenQuote | null> {
-    const id = encodeURIComponent(normaliseCoinType(coinType));
-    let res: { data: RawPool[] };
-    try {
-      res = await this.get<{ data: RawPool[] }>(`/networks/${NETWORK}/tokens/${id}/pools?page=1`);
-    } catch (err) {
-      if (err instanceof Error && err.message.includes(" 404 ")) return null;
-      throw err;
-    }
-    const pools = res.data.map(normalisePool).sort((a, b) => b.liquidityUsd - a.liquidityUsd);
-    const best = pools[0];
-    if (!best) return null;
-    const isBase = best.baseCoinType === normaliseCoinType(coinType);
-    const raw = res.data.find((r) => r.attributes.address === best.address);
-    const priceUsd = isBase ? best.priceUsd : num((raw?.attributes as any)?.quote_token_price_usd);
-    return { priceUsd, volumeH24Usd: best.volumeUsd.h24, liquidityUsd: best.liquidityUsd };
+  /** Price and activity for a token from its most liquid pool, cached for a minute. */
+  async quote(token: string): Promise<TokenQuote | null> {
+    const key = normaliseToken(token);
+    const hit = this.quoteCache.get(key);
+    if (hit && Date.now() - hit.at < 60_000) return hit.value;
+    await this.tokenPools(key);
+    return this.quoteCache.get(key)?.value ?? null;
+  }
+
+  /** A token's ticker, from its pools. */
+  async symbol(token: string): Promise<string | null> {
+    const key = normaliseToken(token);
+    if (this.symbolCache.has(key)) return this.symbolCache.get(key)!;
+    await this.tokenPools(key).catch(() => []);
+    return this.symbolCache.get(key) ?? null;
+  }
+
+  /** Search pools by ticker or name on the given chains, most liquid first. */
+  async search(query: string, chains: Chain[] = CHAINS): Promise<Pool[]> {
+    // One call across every network, then keep only the chains Tide covers.
+    const res = await this.get<{ data: RawPool[] }>(`/search/pools?query=${encodeURIComponent(query)}&page=1`);
+    const wanted = chains.map((c) => `${GECKO_NETWORK[c]}_`);
+    return res.data
+      .filter((r) => wanted.some((w) => (r.relationships?.base_token?.data?.id ?? "").startsWith(w)))
+      .map(normalisePool)
+      .sort((a, b) => b.liquidityUsd - a.liquidityUsd);
   }
 }

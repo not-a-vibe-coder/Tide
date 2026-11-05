@@ -4,6 +4,7 @@ import { Companion } from "./ai/companion.js";
 import { Llm } from "./ai/llm.js";
 import { createBot } from "./bot/bot.js";
 import { runChecks } from "./checks.js";
+import { SolanaReader } from "./chain/solana.js";
 import { SuiReader } from "./chain/sui.js";
 import { loadConfig } from "./config.js";
 import { DEFAULT_SPIKE_RULES } from "./core/spike.js";
@@ -11,7 +12,7 @@ import { log } from "./log.js";
 import { Market } from "./market/gecko.js";
 import { Store } from "./memory/store.js";
 import { Memory } from "./memory/walrus.js";
-import { Tide } from "./tide.js";
+import { Tide, type ChainRules, type Readers } from "./tide.js";
 
 async function main() {
   const cfg = loadConfig();
@@ -22,13 +23,23 @@ async function main() {
     serverUrl: cfg.MEMWAL_SERVER_URL,
     dryRun: cfg.MEMWAL_DRY_RUN,
   });
-  const sui = new SuiReader(cfg.TATUM_SUI_GRPC_URL, cfg.TATUM_API_KEY, cfg.TATUM_SUI_RPC_URL);
   const market = new Market(cfg.GECKOTERMINAL_BASE_URL);
-  const tide = new Tide(store, memory, sui, market, {
-    ...DEFAULT_SPIKE_RULES,
-    minLiquidityUsd: cfg.MIN_LIQUIDITY_USD,
-    minHourlyVolumeUsd: cfg.MIN_HOURLY_VOLUME_USD,
-  });
+  const readers: Readers = {};
+  const rules: ChainRules = {};
+  if (cfg.CHAINS.includes("sui")) {
+    readers.sui = new SuiReader(cfg.TATUM_SUI_GRPC_URL, cfg.TATUM_API_KEY, cfg.TATUM_SUI_RPC_URL);
+    rules.sui = { ...DEFAULT_SPIKE_RULES, minLiquidityUsd: cfg.MIN_LIQUIDITY_USD, minHourlyVolumeUsd: cfg.MIN_HOURLY_VOLUME_USD };
+  }
+  if (cfg.CHAINS.includes("solana")) {
+    readers.solana = new SolanaReader(cfg.TATUM_SOLANA_RPC_URL, cfg.TATUM_API_KEY, (mint) => market.symbol(mint));
+    rules.solana = {
+      ...DEFAULT_SPIKE_RULES,
+      minLiquidityUsd: cfg.SOLANA_MIN_LIQUIDITY_USD,
+      minHourlyVolumeUsd: cfg.SOLANA_MIN_HOURLY_VOLUME_USD,
+    };
+  }
+  const tide = new Tide(store, memory, readers, market, rules);
+  log.info(`chains: ${tide.chains.join(", ")}`);
 
   log.info("Walrus Memory:", await memory.health().catch((e) => `unreachable (${e.message})`));
 
@@ -44,17 +55,18 @@ async function main() {
 
   const bot = createBot(cfg.TELEGRAM_BOT_TOKEN, tide, {
     adminIds: cfg.ADMIN_TELEGRAM_IDS,
-    runDoctor: (wallet) => runChecks(cfg, wallet, { market }),
+    runDoctor: (wallets) => runChecks(cfg, wallets, { market }),
     companion,
   });
   await bot.api.setMyCommands([
-    { command: "start", description: "Start or see your status" },
-    { command: "holdings", description: "Your positions and P&L" },
-    { command: "scan", description: "Scan Sui for spikes now" },
-    { command: "check", description: "Check your wallet for new buys" },
-    { command: "budget", description: "Set your weekly budget" },
-    { command: "memory", description: "What Tide remembers about you" },
-    { command: "help", description: "All commands" },
+    { command: "start", description: "start, or see what i'm watching" },
+    { command: "holdings", description: "your bags and how they're doing" },
+    { command: "scan", description: "anything moving on sui or solana" },
+    { command: "check", description: "look for new buys in your wallets" },
+    { command: "budget", description: "how much you'll risk a week" },
+    { command: "alerts", description: "pause me, or pick sui, solana or both" },
+    { command: "memory", description: "what i remember about you" },
+    { command: "help", description: "everything i can do" },
   ]);
 
   const guard = (name: string, fn: () => Promise<unknown>) => {

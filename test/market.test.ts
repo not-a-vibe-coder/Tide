@@ -44,3 +44,30 @@ describe("Market rate limiting", () => {
     expect(peak).toBe(1);
   });
 });
+
+describe("Market search", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("searches once and keeps only Sui and Solana pools", async () => {
+    const mk = (id: string, liq: string) => {
+      const r = structuredClone(rawGeckoPool) as any;
+      r.relationships.base_token.data.id = id;
+      r.attributes.reserve_in_usd = liq;
+      r.attributes.address = id;
+      return r;
+    };
+    const fetchMock = vi.fn(async () =>
+      ok({
+        data: [
+          mk("eth_0xabc", "9000000"),
+          mk("solana_EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm", "3000000"),
+          mk("sui-network_0x5::wif::WIF", "100000"),
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const pools = await new Market("https://x", 0).search("wif");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(pools.map((p) => p.chain)).toEqual(["solana", "sui"]);
+  });
+});

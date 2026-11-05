@@ -2,28 +2,40 @@ import { Bot, InlineKeyboard, type Context } from "grammy";
 import { toTelegramHtml } from "../ai/clean.js";
 import type { Companion } from "../ai/companion.js";
 import { parseSuiAddress } from "../chain/sui.js";
+import { CHAIN_LABEL, parseSolanaAddress, type Chain } from "../core/chains.js";
 import type { CheckResult } from "../checks.js";
 import { log } from "../log.js";
 import type { AlertAction, Button, Notifier, Tide } from "../tide.js";
 import { esc, shortAddress, usd } from "./format.js";
 
 const HELP = [
-  "i'm <b>tide</b>. i watch sui for tokens that start moving, keep track of what you buy and why, and get stricter with you when your calls go bad. you can just talk to me too.",
+  "i'm <b>tide</b>. i watch sui and solana for tokens that start moving, keep track of what you buy and why, and get stricter with you when your calls go bad. you can just talk to me too, or ask me about any token.",
   "",
   "/holdings · your bags, how they're doing, and why you bought",
-  "/scan · look for anything moving on sui right now",
+  "/scan · look for anything moving right now",
   "/check · look for new buys in your wallet",
   "/budget <code>30</code> · how much you're happy to risk a week, in usd",
   "/share <code>25</code> · what % of what's left i size each alert from",
   "/alerts on, off or reset · pause me, or unmute token types",
-  "/wallet <code>0x…</code> · change the wallet i watch",
+  "/alerts sui, solana or both · which chains you hear about",
+  "/wallet <code>address</code> · add or change a sui or solana wallet",
   "/memory · everything i remember about you",
   "",
   "what you tell me lives on walrus memory. nothing i say is financial advice.",
 ].join("\n");
 
+/** A pasted Sui or Solana wallet address. */
+function parseWallet(text: string): { chain: Chain; address: string } | null {
+  const sui = parseSuiAddress(text);
+  if (sui) return { chain: "sui", address: sui };
+  const sol = parseSolanaAddress(text);
+  if (sol) return { chain: "solana", address: sol };
+  return null;
+}
+
 /** Looks like a question to the bot, not an answer to "why did you buy". */
-const QUESTION = /\?\s*$|^(what|how|why|should|is|are|can|could|do|does|did|when|which|who|where|tell me|show me|abeg|wetin|how far)\b/i;
+const QUESTION =
+  /\?\s*$|\$[A-Za-z]|::|^(what|how|why|should|is|are|can|could|do|does|did|when|which|who|where|tell me|show me|thoughts|rate|check|abeg|wetin|how far)\b/i;
 
 function keyboard(buttons?: Button[][]): InlineKeyboard | undefined {
   if (!buttons?.length) return undefined;
@@ -37,7 +49,7 @@ function keyboard(buttons?: Button[][]): InlineKeyboard | undefined {
 
 export interface BotOptions {
   adminIds: number[];
-  runDoctor?: (wallet?: string) => Promise<CheckResult[]>;
+  runDoctor?: (wallets: { sui?: string | null; solana?: string | null }) => Promise<CheckResult[]>;
   companion?: Companion;
 }
 
@@ -66,16 +78,22 @@ export function createBot(token: string, tide: Tide, opts: BotOptions): Bot {
   };
   const hey = (ctx: Context) => (ctx.from?.first_name ? `${esc(ctx.from.first_name.toLowerCase())}, ` : "");
 
-  async function saveWallet(ctx: Context, address: string) {
+  async function saveWallet(ctx: Context, address: string, chain: Chain) {
     const userId = ctx.from!.id;
-    await reply(ctx, `one sec, reading <code>${shortAddress(address)}</code>…`);
+    if (!tide.chains.includes(chain)) return reply(ctx, `i'm not watching ${CHAIN_LABEL[chain]} right now, sorry.`);
+    await reply(ctx, `one sec, reading your ${CHAIN_LABEL[chain]} wallet <code>${shortAddress(address)}</code>…`);
     try {
-      const { liquidUsd, proposedBudget } = await tide.setWallet(userId, address);
+      const { liquidUsd, proposedBudget } = await tide.setWallet(userId, address, chain);
+      const other: Chain = chain === "sui" ? "solana" : "sui";
+      const user = tide.store.getUser(userId);
+      const hasOther = other === "sui" ? !!user?.wallet : !!user?.solWallet;
+      const otherHint = !hasOther && tide.chains.includes(other) ? `
+you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
       await reply(
         ctx,
         [
-          `got it, i'll remember this wallet so you never have to send it again.`,
-          `you've got about <b>${usd(liquidUsd)}</b> in sui and usdc.`,
+          `got it, i'll remember this ${CHAIN_LABEL[chain]} wallet so you never have to send it again.${otherHint}`,
+          `across your wallets you've got about <b>${usd(liquidUsd)}</b> in cash (sui, sol and stablecoins).`,
           "",
           `how about a weekly trading budget of <b>${usd(proposedBudget)}</b>? i'll never suggest more than that in a week, even when something's flying.`,
         ].join("\n"),
@@ -94,8 +112,11 @@ export function createBot(token: string, tide: Tide, opts: BotOptions): Bot {
 
   bot.command("start", async (ctx) => {
     const user = ensureUser(ctx);
-    if (user.wallet) {
-      await reply(ctx, `${hey(ctx) || "hey, "}welcome back. still watching <code>${shortAddress(user.wallet)}</code> for you.\n\n${HELP}`);
+    const watching = [user.wallet && `sui <code>${shortAddress(user.wallet)}</code>`, user.solWallet && `solana <code>${shortAddress(user.solWallet)}</code>`]
+      .filter(Boolean)
+      .join(" and ");
+    if (watching) {
+      await reply(ctx, `${hey(ctx) || "hey, "}welcome back. still watching ${watching} for you.\n\n${HELP}`);
       return;
     }
     await reply(
@@ -104,7 +125,7 @@ export function createBot(token: string, tide: Tide, opts: BotOptions): Bot {
         `hey${ctx.from?.first_name ? ` ${esc(ctx.from.first_name.toLowerCase())}` : ""}, i'm <b>tide</b>.`,
         "i watch sui for tokens that start picking up volume, keep track of what you buy and why, and tell you how much i'd risk based on your own budget and record.",
         "",
-        "paste your <b>sui wallet address</b> and we'll start. i only read public data, i'll never ask for keys or signatures.",
+        "paste your <b>sui or solana wallet address</b> and we'll start. i only read public data, i'll never ask for keys or signatures.",
       ].join("\n"),
     );
   });
@@ -113,9 +134,9 @@ export function createBot(token: string, tide: Tide, opts: BotOptions): Bot {
 
   bot.command("wallet", async (ctx) => {
     ensureUser(ctx);
-    const address = parseSuiAddress(ctx.match ?? "");
-    if (!address) return reply(ctx, "send it like this: /wallet <code>0x…</code>");
-    await saveWallet(ctx, address);
+    const w = parseWallet(ctx.match ?? "");
+    if (!w) return reply(ctx, "send it like this: /wallet followed by your sui (0x…) or solana address.");
+    await saveWallet(ctx, w.address, w.chain);
   });
 
   bot.command("budget", async (ctx) => {
@@ -144,12 +165,12 @@ export function createBot(token: string, tide: Tide, opts: BotOptions): Bot {
 
   bot.command("check", async (ctx) => {
     const user = ensureUser(ctx);
-    if (!user.wallet) return reply(ctx, "i need your wallet first, paste your sui address here.");
+    if (!user.wallet && !user.solWallet) return reply(ctx, "i need a wallet first, paste your sui or solana address here.");
     const found = await tide.checkWallet(user).catch((err) => {
       log.error("check failed", err);
       return -1;
     });
-    if (found < 0) return reply(ctx, "couldn't reach sui just now. give it a minute and try again.");
+    if (found < 0) return reply(ctx, "couldn't read your wallet just now. give it a minute and try again.");
     if (found === 0) await reply(ctx, "nothing new since i last looked.");
   });
 
@@ -161,7 +182,7 @@ export function createBot(token: string, tide: Tide, opts: BotOptions): Bot {
       return -1;
     });
     if (n < 0) await reply(ctx, "the market data is being slow right now. try me again in a bit.");
-    else if (n === 0) await reply(ctx, "nothing's really moving on sui right now. i'll keep an eye out.");
+    else if (n === 0) await reply(ctx, `nothing's really moving on ${tide.chains.map((c) => CHAIN_LABEL[c]).join(" or ")} right now. i'll keep an eye out.`);
   });
 
   bot.command("alerts", async (ctx) => {
@@ -170,7 +191,13 @@ export function createBot(token: string, tide: Tide, opts: BotOptions): Bot {
     if (arg === "off") (tide.setAlerts(ctx.from!.id, false), await reply(ctx, "okay, i'll stay quiet. /alerts on when you want me back."));
     else if (arg === "on") (tide.setAlerts(ctx.from!.id, true), await reply(ctx, "alerts are back on."));
     else if (arg === "reset") (tide.unmuteAll(ctx.from!.id), await reply(ctx, "unmuted everything, you'll hear about all token types again."));
-    else await reply(ctx, "use /alerts on, /alerts off or /alerts reset.");
+    else if (arg === "sui" || arg === "solana") {
+      tide.setAlertChains(ctx.from!.id, [arg]);
+      await reply(ctx, `okay, only ${arg} alerts from now on. /alerts both to hear about everything.`);
+    } else if (arg === "both") {
+      tide.setAlertChains(ctx.from!.id, ["sui", "solana"]);
+      await reply(ctx, "you'll hear about sui and solana.");
+    } else await reply(ctx, "use /alerts on, off, reset, or sui, solana, both.");
   });
 
   bot.command("memory", async (ctx) => {
@@ -185,7 +212,7 @@ export function createBot(token: string, tide: Tide, opts: BotOptions): Bot {
     if (!runDoctor) return reply(ctx, "checks aren't available in this build.");
     await reply(ctx, "checking telegram, tatum, geckoterminal and a real walrus memory write…");
     const user = tide.store.getUser(ctx.from!.id);
-    const results = await runDoctor(user?.wallet ?? undefined);
+    const results = await runDoctor({ sui: user?.wallet, solana: user?.solWallet });
     const lines = results.map((r) => `${r.ok ? "✅" : "❌"} <b>${esc(r.name)}</b>: ${esc(r.detail)}`);
     if (companion) {
       const ai = await companion.ping().then(
@@ -255,11 +282,14 @@ export function createBot(token: string, tide: Tide, opts: BotOptions): Bot {
       awaitingBudget.delete(user.id);
     }
 
-    const address = parseSuiAddress(text);
-    if (address) return saveWallet(ctx, address);
+    const wallet = parseWallet(text);
+    // A pasted Solana token address is a question about that token, not a wallet.
+    if (wallet && !(wallet.chain === "solana" && (await tide.isSolanaMint(wallet.address)))) {
+      return saveWallet(ctx, wallet.address, wallet.chain);
+    }
 
     // An unanswered "why did you buy" takes this message, unless it's clearly a question.
-    if (!QUESTION.test(text)) {
+    if (!wallet && !QUESTION.test(text)) {
       const symbol = tide.answerReason(user.id, text);
       if (symbol) {
         await reply(ctx, `got it. i'll check <b>${esc(symbol)}</b> against that every morning, and tell you if it stops being true.`);
@@ -269,19 +299,25 @@ export function createBot(token: string, tide: Tide, opts: BotOptions): Bot {
     }
 
     if (companion?.enabled) {
-      await ctx.replyWithChatAction("typing").catch(() => {});
-      const answer = await companion.reply(user.id, ctx.from.first_name, text).catch((err) => {
-        log.warn("chat failed", err);
-        return null;
-      });
+      // Telegram's typing indicator lasts ~5s; keep it up while lookups and the model run.
+      const typing = () => ctx.replyWithChatAction("typing").catch(() => {});
+      void typing();
+      const keepTyping = setInterval(typing, 4_500);
+      const answer = await companion
+        .reply(user.id, ctx.from.first_name, text)
+        .catch((err) => {
+          log.warn("chat failed", err);
+          return null;
+        })
+        .finally(() => clearInterval(keepTyping));
       if (answer) return reply(ctx, toTelegramHtml(answer));
     }
 
     await reply(
       ctx,
-      user.wallet
+      user.wallet || user.solWallet
         ? `${hey(ctx)}i'm better with commands right now. try /holdings, /scan or /help.`
-        : "paste your sui wallet address and we'll get started.",
+        : "paste your sui or solana wallet address and we'll get started.",
     );
   });
 

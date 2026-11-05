@@ -1,6 +1,6 @@
 # Tide
 
-A Telegram bot that spots Sui tokens gaining momentum, tracks how your own trades are doing, and suggests how much to risk based on your budget and your track record. Everything it learns about you is stored on **Walrus Memory**, so its alerts and sizing change as it gets to know you.
+A Telegram bot that spots Sui and Solana tokens gaining momentum, tracks how your own trades are doing, and suggests how much to risk based on your budget and your track record. Everything it learns about you is stored on **Walrus Memory**, so its alerts and sizing change as it gets to know you.
 
 Built for the [Walrus × Tatum Total Recall](https://recall-tatum-walrus.vercel.app/) hackathon, Markets & Sports Prediction track.
 
@@ -8,13 +8,14 @@ Built for the [Walrus × Tatum Total Recall](https://recall-tatum-walrus.vercel.
 
 ## How it works
 
-1. **Start:** send `/start` and paste your Sui address. Tide saves it and never asks again.
-2. **Budget:** Tide reads your SUI and USDC balance and proposes a weekly trading budget (10% of it). You confirm or pick your own.
+1. **Start:** send `/start` and paste your Sui or Solana address (or both). Tide saves them and never asks again.
+2. **Budget:** Tide reads your cash across wallets (SUI, SOL, USDC, USDT) and proposes a weekly trading budget (10% of it). You confirm or pick your own.
 3. **Buys:** every 30 minutes Tide compares your balances with the last snapshot. A new token in your wallet is a buy, and Tide asks one question: *why did you buy it?*
 4. **Holdings:** `/holdings` and a 9am digest show gain or loss since each buy, next to the reason you gave. If you bought for volume and volume has dropped 30%+, Tide tells you.
-5. **Spike alerts:** every 5 minutes Tide scans trending and new Sui pools. A pool whose last hour is 3× its average hour, or whose price (and market cap) jumped 20%+ in an hour, triggers an alert with a risk check and a suggested max size.
+5. **Spike alerts:** every 5 minutes Tide scans trending and new pools on Sui and Solana (Solana needs at least $50k liquidity and $50k hourly volume, since it's far busier). A pool whose last hour is 3× its average hour, or whose price (and market cap) jumped 20%+ in an hour, triggers an alert with a risk check and a suggested max size.
 6. **Feedback:** tap **Bought**, **Skipped** or **Not for me**. 24 hours later Tide records how the token did. That outcome feeds your track record.
-7. **Just talk to it:** ask anything in plain words ("how's scoop doing?", "should i go bigger on this one?", or in pidgin). Tide answers like a friend texting, using your real budget, positions, buy reasons and track record, plus memories recalled from Walrus.
+7. **Ask about any token:** "why shouldn't i buy $WIF?", "thoughts on scoop", or paste a Sui coin type or Solana mint. Tide looks it up live (price, market cap, liquidity, volume, pool age, buy/sell pressure, its own risk check), gives you the red flags first, then what's genuinely good, then your max size by your own rules. It never predicts prices or tells you to buy or sell.
+8. **Just talk to it:** ask anything in plain words ("how's scoop doing?", "should i go bigger on this one?", or in pidgin). Tide answers like a friend texting, using your real budget, positions, buy reasons and track record, plus memories recalled from Walrus.
 
 ### Voice
 
@@ -50,7 +51,7 @@ Three learning loops read from it:
 
 **Wipe test:** `/rebuild` (admin only) deletes the local cache and replays every event from Walrus Memory. Budgets, positions, reasons, mutes and track records all come back.
 
-**Tatum Sui gRPC** (`sui-mainnet-grpc.gateway.tatum.io`, native gRPC over HTTP/2) reads wallet balances and coin metadata. If gRPC fails, Tide falls back to Tatum's Sui JSON-RPC.
+**Tatum Sui gRPC** (`sui-mainnet-grpc.gateway.tatum.io`, native gRPC over HTTP/2) reads Sui balances and coin metadata, falling back to Tatum's Sui JSON-RPC. **Tatum Solana RPC** (`solana-mainnet.gateway.tatum.io`) reads SOL plus every SPL and Token-2022 balance, and tells token mints apart from wallets.
 
 **GeckoTerminal** (free, no key) provides pool volume, price, market cap and liquidity. Tatum doesn't offer token market data for Sui. Calls are queued, cached for a minute and retried on rate limits.
 
@@ -91,13 +92,14 @@ No Walrus keys yet? Set `MEMWAL_DRY_RUN=true` to run without writes.
 | Command | What it does |
 | --- | --- |
 | `/start` | Onboarding, or your status |
-| `/wallet 0x…` | Set or change the tracked address |
+| `/wallet <address>` | Add or change a Sui (0x…) or Solana wallet |
 | `/budget 30` | Weekly budget in USD |
 | `/share 25` | % of remaining budget per alert |
 | `/holdings` | Positions, P&L and your reasons |
 | `/check` | Check your wallet for new buys now |
 | `/scan` | Scan Sui for spikes now |
 | `/alerts on\|off\|reset` | Pause alerts or unmute token classes |
+| `/alerts sui\|solana\|both` | Choose which chains you get alerts for |
 | `/memory` | What Tide remembers, plus Walrus write counts |
 | `/doctor` | Check Telegram, Tatum, GeckoTerminal and a real Walrus write (admin only; non-admins see their Telegram ID) |
 | `/rebuild` | Wipe test (admin only) |
@@ -117,7 +119,7 @@ npm run typecheck
 src/
   core/      pure logic: spike rules, risk, sizing, buy detection
   memory/    events, SQLite cache, Walrus Memory client and rebuild
-  chain/     Tatum Sui gRPC reader
+  chain/     Tatum Sui gRPC and Solana RPC readers
   market/    GeckoTerminal client
   ai/        Jasmine-style persona, Groq → Gemini chain, reply cleanup
   bot/       Telegram handlers and message formatting

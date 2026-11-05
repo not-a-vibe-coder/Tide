@@ -5,6 +5,7 @@ export const SCOOP = "0x" + "ab".repeat(32) + "::scoop::SCOOP";
 
 export function pool(over: Partial<Pool> = {}): Pool {
   return {
+    chain: "sui",
     address: "0xpool1",
     name: "SCOOP / SUI",
     dex: "cetus",

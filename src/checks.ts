@@ -1,9 +1,9 @@
 import { delegateKeyToPublicKey } from "@mysten-incubation/memwal";
 import { Bot } from "grammy";
+import { SolanaReader } from "./chain/solana.js";
 import { SuiReader } from "./chain/sui.js";
 import type { Config } from "./config.js";
 import { SUI_COIN_TYPE } from "./core/buys.js";
-import { detectSpike } from "./core/spike.js";
 import { Market } from "./market/gecko.js";
 import { Store } from "./memory/store.js";
 import { Memory } from "./memory/walrus.js";
@@ -45,6 +45,8 @@ function shortType(type: string): string {
 }
 
 const SAMPLE_WALLET = "0x0000000000000000000000000000000000000000000000000000000000000005";
+/** A long-lived Solana account (the vote program) to read when the admin has no Solana wallet set. */
+const SAMPLE_SOLANA_WALLET = "Vote111111111111111111111111111111111111111";
 
 async function check(name: string, fn: () => Promise<string>): Promise<CheckResult> {
   try {
@@ -60,7 +62,13 @@ export interface CheckDeps {
 }
 
 /** Tests every outside connection with the configured keys, including one real Walrus write. */
-export async function runChecks(cfg: Config, wallet: string = SAMPLE_WALLET, deps: CheckDeps = {}): Promise<CheckResult[]> {
+export async function runChecks(
+  cfg: Config,
+  wallets: { sui?: string | null; solana?: string | null } = {},
+  deps: CheckDeps = {},
+): Promise<CheckResult[]> {
+  const wallet = wallets.sui ?? SAMPLE_WALLET;
+  const solWallet = wallets.solana ?? SAMPLE_SOLANA_WALLET;
   const sui = new SuiReader(cfg.TATUM_SUI_GRPC_URL, cfg.TATUM_API_KEY, cfg.TATUM_SUI_RPC_URL);
   const market = deps.market ?? new Market(cfg.GECKOTERMINAL_BASE_URL);
   return [
@@ -73,11 +81,23 @@ export async function runChecks(cfg: Config, wallet: string = SAMPLE_WALLET, dep
       const b = await sui.balances(wallet);
       return `${b.length} balances read for ${wallet.slice(0, 10)}… via ${sui.lastTransport}`;
     }),
+    ...(cfg.CHAINS.includes("solana")
+      ? [
+          await check("Tatum Solana RPC", async () => {
+            if (!cfg.TATUM_API_KEY) throw new Error("TATUM_API_KEY is empty");
+            const b = await new SolanaReader(cfg.TATUM_SOLANA_RPC_URL, cfg.TATUM_API_KEY).balances(solWallet);
+            return `${b.length} balances read for ${solWallet.slice(0, 8)}…`;
+          }),
+        ]
+      : []),
     await check("GeckoTerminal", async () => {
-      const pools = await market.candidatePools();
-      const spikes = pools.filter((p) => detectSpike(p)).length;
+      const parts: string[] = [];
+      for (const chain of cfg.CHAINS) {
+        const pools = await market.candidatePools(chain);
+        parts.push(`${pools.length} ${chain} pools`);
+      }
       const price = await market.quote(SUI_COIN_TYPE);
-      return `${pools.length} Sui pools, ${spikes} spiking now, SUI at $${price?.priceUsd.toFixed(3) ?? "?"}`;
+      return `${parts.join(", ")}, SUI at $${price?.priceUsd.toFixed(3) ?? "?"}`;
     }),
     await check("Walrus Memory", async () => {
       const store = new Store(":memory:");

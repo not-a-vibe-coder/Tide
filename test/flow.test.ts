@@ -41,7 +41,7 @@ function setup() {
   const memory = new Memory(store, { privateKey: "", accountId: "", serverUrl: "", dryRun: false, client: mock as never });
   const sui = new FakeSui();
   const market = new FakeMarket();
-  const tide = new Tide(store, memory, sui as unknown as SuiReader, market as unknown as Market);
+  const tide = new Tide(store, memory, { sui: sui as unknown as SuiReader }, market as unknown as Market);
   const sent: { html: string; buttons?: Button[][] }[] = [];
   tide.attach({ send: async (_c, html, buttons) => void sent.push({ html, buttons }) });
   return { store, mock, memory, sui, market, tide, sent };
@@ -89,15 +89,20 @@ describe("Tide end to end", () => {
     await tide.setWallet(USER, "0x" + "1".repeat(64));
     tide.setBudget(USER, 40);
 
-    // Six alerts across two scans, all established pools with full liquidity (r = 1).
+    // Six alerts across three scans (two per chain per scan), all established pools with full liquidity (r = 1).
     market.pools = [1, 2, 3].map((i) => spikePool(i));
-    expect(await tide.scan()).toBe(3);
+    expect(await tide.scan()).toBe(2);
     const firstAlert = sent.at(-1)!.html;
     expect(firstAlert).toContain("keep it under <b>$10</b>"); // 40 × 25% × 1 × 1
+    expect(firstAlert).toContain("moving on sui");
+
+    vi.setSystemTime(new Date("2026-11-04T14:00:00Z"));
+    market.pools = [3, 4].map((i) => spikePool(i));
+    expect(await tide.scan()).toBe(2);
 
     vi.setSystemTime(new Date("2026-11-04T17:00:00Z"));
-    market.pools = [4, 5, 6].map((i) => spikePool(i));
-    expect(await tide.scan()).toBe(3);
+    market.pools = [5, 6].map((i) => spikePool(i));
+    expect(await tide.scan()).toBe(2);
 
     // A day later every token is down 40%.
     vi.setSystemTime(new Date("2026-11-05T18:00:00Z"));

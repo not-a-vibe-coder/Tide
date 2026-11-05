@@ -1,12 +1,23 @@
+import { SOLANA_USDC, SOLANA_USDT, SOL_MINT } from "./chains.js";
 import type { Balance, DetectedBuy } from "./types.js";
 
 export const SUI_COIN_TYPE = "0x2::sui::SUI";
 
-/** Coins treated as cash, not as positions. Native USDC on Sui plus SUI itself. */
+/** Coins treated as cash, not as positions: SUI and native USDC on Sui, SOL, USDC and USDT on Solana. */
 export const CASH_COIN_TYPES = new Set([
   SUI_COIN_TYPE,
   "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI",
   "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC",
+  SOL_MINT,
+  SOLANA_USDC,
+  SOLANA_USDT,
+]);
+
+/** Cash coins worth $1 each. */
+export const STABLECOINS = new Set([
+  "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC",
+  SOLANA_USDC,
+  SOLANA_USDT,
 ]);
 
 export function normaliseCoinType(coinType: string): string {

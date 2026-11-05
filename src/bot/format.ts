@@ -1,3 +1,4 @@
+import { CHAIN_LABEL, GECKO_NETWORK } from "../core/chains.js";
 import type { Pool, RiskCheck, SizingResult, Spike } from "../core/types.js";
 import type { Holding } from "../memory/store.js";
 
@@ -30,7 +31,7 @@ export function alertMessage(spike: Spike, risk: RiskCheck, sizing: SizingResult
       ? "risk looks lower than most, nothing jumped out at me."
       : `risk looks ${risk.label}${risk.flags.length ? `: ${esc(risk.flags.join(", "))}` : ""}.`;
   const lines = [
-    `<b>${esc(p.baseSymbol)}</b> just started moving on sui`,
+    `<b>${esc(p.baseSymbol)}</b> just started moving on ${CHAIN_LABEL[p.chain]}`,
     `${esc(sentence(spike.reasons))}.`,
     "",
     `price ${usd(p.priceUsd)} · mcap ${usd(p.marketCapUsd ?? p.fdvUsd)} · liquidity ${usd(p.liquidityUsd)}`,
@@ -50,7 +51,7 @@ export function alertMessage(spike: Spike, risk: RiskCheck, sizing: SizingResult
   } else {
     lines.push("set a weekly budget with /budget and i'll tell you how much i'd risk on these. nfa.");
   }
-  lines.push("", `<a href="https://www.geckoterminal.com/sui-network/pools/${encodeURIComponent(p.address)}">chart</a>`);
+  lines.push("", `<a href="https://www.geckoterminal.com/${GECKO_NETWORK[p.chain]}/pools/${encodeURIComponent(p.address)}">chart</a>`);
   return lines.join("\n");
 }
 

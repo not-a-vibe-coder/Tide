@@ -27,6 +27,13 @@ const schema = z.object({
   TATUM_API_KEY: z.string().optional().default(""),
   TATUM_SUI_GRPC_URL: z.string().url().default("https://sui-mainnet-grpc.gateway.tatum.io"),
   TATUM_SUI_RPC_URL: z.string().url().default("https://sui-mainnet.gateway.tatum.io"),
+  TATUM_SOLANA_RPC_URL: z.string().url().default("https://solana-mainnet.gateway.tatum.io"),
+
+  /** Chains to scan and read, comma-separated. */
+  CHAINS: z
+    .string()
+    .default("sui,solana")
+    .transform((v) => v.split(",").map((s) => s.trim().toLowerCase()).filter((c): c is "sui" | "solana" => c === "sui" || c === "solana")),
 
   GROQ_API_KEY: z.string().optional().default(""),
   GEMINI_API_KEY: z.string().optional().default(""),
@@ -42,6 +49,8 @@ const schema = z.object({
   WALLET_CHECK_INTERVAL_MINUTES: z.coerce.number().int().positive().default(30),
   MIN_LIQUIDITY_USD: z.coerce.number().nonnegative().default(10_000),
   MIN_HOURLY_VOLUME_USD: z.coerce.number().nonnegative().default(5_000),
+  SOLANA_MIN_LIQUIDITY_USD: z.coerce.number().nonnegative().default(50_000),
+  SOLANA_MIN_HOURLY_VOLUME_USD: z.coerce.number().nonnegative().default(50_000),
   DIGEST_HOUR_LAGOS: z.coerce.number().int().min(0).max(23).default(9),
 });
 

@@ -5,6 +5,6 @@
 import { runChecks } from "./checks.js";
 import { loadConfig } from "./config.js";
 
-const results = await runChecks(loadConfig(), process.argv[2]);
+const results = await runChecks(loadConfig(), { sui: process.argv[2], solana: process.argv[3] });
 for (const r of results) console.log(`${r.ok ? "✔" : "✘"} ${r.name}: ${r.detail}`);
 process.exit(results.every((r) => r.ok) ? 0 : 1);

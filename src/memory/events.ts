@@ -7,7 +7,16 @@ import type { TokenClass } from "../core/types.js";
  * latest event wins, and the cache can be rebuilt by replaying events.
  */
 export type EventData =
-  | { type: "profile_set"; chatId?: number; wallet?: string; budgetUsd?: number; baseShare?: number; alertsOn?: boolean }
+  | {
+      type: "profile_set";
+      chatId?: number;
+      /** Sui wallet. */
+      wallet?: string;
+      solWallet?: string;
+      budgetUsd?: number;
+      baseShare?: number;
+      alertsOn?: boolean;
+    }
   | {
       type: "buy_detected";
       holdingId: string;
@@ -80,7 +89,8 @@ export function describe(e: TideEvent): string {
   switch (d.type) {
     case "profile_set": {
       const parts: string[] = [];
-      if (d.wallet) parts.push(`wallet ${d.wallet}`);
+      if (d.wallet) parts.push(`sui wallet ${d.wallet}`);
+      if (d.solWallet) parts.push(`solana wallet ${d.solWallet}`);
       if (d.budgetUsd !== undefined) parts.push(`weekly budget ${usd(d.budgetUsd)}`);
       if (d.baseShare !== undefined) parts.push(`base share ${Math.round(d.baseShare * 100)}%`);
       if (d.alertsOn !== undefined) parts.push(`alerts ${d.alertsOn ? "on" : "off"}`);

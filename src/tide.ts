@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { SUI_COIN_TYPE, diffBalances, isCash, normaliseCoinType, toUnits } from "./core/buys.js";
+import { STABLECOINS, SUI_COIN_TYPE, diffBalances, isCash, normaliseCoinType, toUnits } from "./core/buys.js";
+import { SOL_MINT, chainOf, type Chain } from "./core/chains.js";
 import { proposeBudget, startOfWeekLagos, suggestSize, trackRecordMultiplier } from "./core/sizing.js";
 import { DEFAULT_SPIKE_RULES, assessRisk, detectSpike, type SpikeRules } from "./core/spike.js";
 import type { SizingResult, Spike, TokenClass } from "./core/types.js";
 import { NO_REASON, alertMessage, esc, holdingLine, pct, usd, type HoldingView } from "./bot/format.js";
-import type { SuiReader } from "./chain/sui.js";
+import type { CoinInfo } from "./chain/sui.js";
 import { log } from "./log.js";
 import type { Market } from "./market/gecko.js";
 import { SHARED_NAMESPACE, userNamespace } from "./memory/events.js";
@@ -25,8 +26,23 @@ export interface Notifier {
 
 const HOUR = 60 * 60 * 1000;
 const POOL_COOLDOWN_MS = 6 * HOUR;
-const MAX_ALERTS_PER_DAY = 6;
-const USDC_PRICE = 1;
+const MAX_ALERTS_PER_DAY = 8;
+
+/** Reads one chain's wallet. Sui via Tatum gRPC, Solana via Tatum RPC. */
+export interface ChainReader {
+  balances(owner: string): Promise<{ coinType: string; raw: string }[]>;
+  coinInfo(token: string): Promise<CoinInfo>;
+  /** Solana only: tells a token mint from a wallet, since both are plain base58 addresses. */
+  isMint?(address: string): Promise<boolean>;
+}
+
+export type Readers = Partial<Record<Chain, ChainReader>>;
+
+/** Spike rules per chain. Solana is far busier, so its bar is higher. */
+export type ChainRules = Partial<Record<Chain, SpikeRules>>;
+
+/** Alerts per chain per scan, so one busy chain can't crowd out the other. */
+const SPIKES_PER_CHAIN = 2;
 
 export class Tide {
   private notifier: Notifier | null = null;
@@ -36,10 +52,51 @@ export class Tide {
   constructor(
     readonly store: Store,
     readonly memory: Memory,
-    private readonly sui: SuiReader,
+    private readonly readers: Readers,
     private readonly market: Market,
-    private readonly rules: SpikeRules = DEFAULT_SPIKE_RULES,
+    private readonly rules: ChainRules = { sui: DEFAULT_SPIKE_RULES },
   ) {}
+
+  /** Chains this instance scans and reads. */
+  get chains(): Chain[] {
+    return (Object.keys(this.rules) as Chain[]).filter((c) => this.readers[c]);
+  }
+
+  /** A pasted Solana address could be a wallet or a token. False if it can't be checked. */
+  async isSolanaMint(address: string): Promise<boolean> {
+    return (await this.readers.solana?.isMint?.(address).catch(() => false)) ?? false;
+  }
+
+  private reader(token: string): ChainReader {
+    const r = this.readers[chainOf(token)];
+    if (!r) throw new Error(`no reader for ${chainOf(token)}`);
+    return r;
+  }
+
+  private walletsOf(user: User): [Chain, string][] {
+    const out: [Chain, string][] = [];
+    if (user.wallet && this.readers.sui) out.push(["sui", user.wallet]);
+    if (user.solWallet && this.readers.solana) out.push(["solana", user.solWallet]);
+    return out;
+  }
+
+  /**
+   * Read every wallet the user has and merge them into one snapshot (token IDs
+   * say which chain they're on). If a chain can't be read, its last snapshot is
+   * kept so its positions don't look closed.
+   */
+  private async readAll(user: User, previous: { coinType: string; raw: string }[] | null) {
+    const merged: { coinType: string; raw: string }[] = [];
+    for (const [chain, address] of this.walletsOf(user)) {
+      try {
+        merged.push(...(await this.readers[chain]!.balances(address)));
+      } catch (err) {
+        log.warn(`${chain} read failed for ${user.id}: ${err instanceof Error ? err.message : err}`);
+        merged.push(...(previous ?? []).filter((b) => chainOf(b.coinType) === chain));
+      }
+    }
+    return merged;
+  }
 
   attach(notifier: Notifier) {
     this.notifier = notifier;
@@ -71,10 +128,17 @@ export class Tide {
     return this.store.getUser(userId)!;
   }
 
-  /** Save the wallet, take a baseline snapshot, and propose a weekly budget. */
-  async setWallet(userId: number, wallet: string): Promise<{ liquidUsd: number; proposedBudget: number }> {
-    this.memory.record(userId, { type: "profile_set", wallet });
-    const balances = await this.sui.balances(wallet);
+  /**
+   * Save a Sui or Solana wallet, take a baseline snapshot of it, and propose a
+   * weekly budget from the cash across all the user's wallets.
+   */
+  async setWallet(userId: number, wallet: string, chain: Chain = "sui"): Promise<{ liquidUsd: number; proposedBudget: number }> {
+    this.memory.record(userId, chain === "sui" ? { type: "profile_set", wallet } : { type: "profile_set", solWallet: wallet });
+    const reader = this.readers[chain];
+    if (!reader) throw new Error(`${chain} isn't enabled`);
+    const fresh = await reader.balances(wallet);
+    const others = (this.store.getSnapshot(userId) ?? []).filter((b) => chainOf(b.coinType) !== chain);
+    const balances = [...others, ...fresh];
     this.store.setSnapshot(userId, balances);
     const liquidUsd = await this.liquidUsd(balances);
     return { liquidUsd, proposedBudget: proposeBudget(liquidUsd) };
@@ -96,13 +160,14 @@ export class Tide {
     let total = 0;
     for (const b of balances) {
       if (!isCash(b.coinType)) continue;
-      const info = await this.sui.coinInfo(b.coinType);
+      const info = await this.reader(b.coinType).coinInfo(b.coinType);
       const units = toUnits(b.raw, info.decimals);
-      if (normaliseCoinType(b.coinType) === normaliseCoinType(SUI_COIN_TYPE)) {
-        const q = await this.market.quote(SUI_COIN_TYPE).catch(() => null);
-        total += units * (q?.priceUsd ?? 0);
+      if (STABLECOINS.has(b.coinType)) {
+        total += units;
       } else {
-        total += units * USDC_PRICE;
+        const native = b.coinType === SOL_MINT ? SOL_MINT : SUI_COIN_TYPE;
+        const q = await this.market.quote(native).catch(() => null);
+        total += units * (q?.priceUsd ?? 0);
       }
     }
     return total;
@@ -112,15 +177,15 @@ export class Tide {
 
   /** Find new buys and closed positions since the last snapshot. */
   async checkWallet(user: User): Promise<number> {
-    if (!user.wallet) return 0;
-    const current = await this.sui.balances(user.wallet);
+    if (this.walletsOf(user).length === 0) return 0;
     const previous = this.store.getSnapshot(user.id);
+    const current = await this.readAll(user, previous);
     const buys = diffBalances(previous, current);
     this.store.setSnapshot(user.id, current);
 
     let found = 0;
     for (const b of buys) {
-      const info = await this.sui.coinInfo(b.coinType);
+      const info = await this.reader(b.coinType).coinInfo(b.coinType);
       const units = toUnits(b.rawDelta, info.decimals);
       const quote = await this.market.quote(b.coinType).catch(() => null);
       const holdingId = randomUUID();
@@ -140,7 +205,9 @@ export class Tide {
 
     // A holding whose coin is gone from the wallet is closed.
     const held = new Map(current.map((b) => [normaliseCoinType(b.coinType), BigInt(b.raw)]));
+    const watched = new Set(this.walletsOf(user).map(([c]) => c));
     for (const h of this.store.openHoldings(user.id)) {
+      if (!watched.has(chainOf(h.coinType))) continue;
       if ((held.get(normaliseCoinType(h.coinType)) ?? 0n) > 0n) continue;
       const quote = await this.market.quote(h.coinType).catch(() => null);
       const pnlPct = quote && h.entryPriceUsd ? (quote.priceUsd / h.entryPriceUsd - 1) * 100 : null;
@@ -187,19 +254,31 @@ export class Tide {
   // ---- spike scanner ----------------------------------------------------
 
   async scan(): Promise<number> {
-    const pools = await this.market.candidatePools();
-    const spikes = pools
-      .map((p) => detectSpike(p, this.rules))
-      .filter((s): s is Spike => s !== null)
-      .filter((s) => !this.store.poolOnCooldown(s.pool.address, POOL_COOLDOWN_MS))
-      .sort((a, b) => b.pool.volumeUsd.h1 - a.pool.volumeUsd.h1)
-      .slice(0, 3);
+    const spikes: Spike[] = [];
+    let failures = 0;
+    for (const chain of this.chains) {
+      const pools = await this.market.candidatePools(chain).catch((err) => {
+        failures++;
+        log.warn(`${chain} pools failed: ${err instanceof Error ? err.message : err}`);
+        return [];
+      });
+      spikes.push(
+        ...pools
+          .map((p) => detectSpike(p, this.rules[chain]))
+          .filter((s): s is Spike => s !== null)
+          .filter((s) => !this.store.poolOnCooldown(s.pool.address, POOL_COOLDOWN_MS))
+          .sort((a, b) => b.pool.volumeUsd.h1 - a.pool.volumeUsd.h1)
+          .slice(0, SPIKES_PER_CHAIN),
+      );
+    }
+    if (failures === this.chains.length && failures > 0) throw new Error("market data unavailable");
 
     let sent = 0;
     for (const spike of spikes) {
       this.store.markPoolAlerted(spike.pool.address);
       for (const user of this.store.usersWithAlerts()) {
         if (this.store.getPref(user.id, `mute_${spike.tokenClass}`) === "true") continue;
+        if (this.store.getPref(user.id, `mute_chain_${spike.pool.chain}`) === "true") continue;
         if (this.store.recentAlertCount(user.id, new Date(Date.now() - 24 * HOUR)) >= MAX_ALERTS_PER_DAY) continue;
         await this.sendAlert(user, spike);
         sent++;
@@ -264,6 +343,16 @@ export class Tide {
     return action === "bought"
       ? "noted. i'll check on it in 24 hours and tell you how it went."
       : "skipped. i'll still check how it did, so we both learn.";
+  }
+
+  /** Which chains' alerts this user gets. */
+  setAlertChains(userId: number, chains: Chain[]) {
+    for (const c of this.chains) {
+      const muted = chains.includes(c) ? "false" : "true";
+      if ((this.store.getPref(userId, `mute_chain_${c}`) ?? "false") !== muted) {
+        this.memory.record(userId, { type: "preference", key: `mute_chain_${c}`, value: muted });
+      }
+    }
   }
 
   unmuteAll(userId: number) {

@@ -19,10 +19,33 @@ export function replaceDashPauses(text: string): string {
   return parts.join("```");
 }
 
+/** Filler Jasmine never uses, removed wherever the model slips it in. */
+const FILLER = /\b(absolutely|certainly|definitely|great question|i hear you|i understand)\b[,!.]?\s*/gi;
+
+/**
+ * Models drift back to sentence case. Force the texting voice: "i" not "I",
+ * and a lowercase first letter at the start of each sentence or line. Words in
+ * caps (tickers like SCOOP, SUI) and the middle of sentences are left alone.
+ */
+export function enforceVoice(text: string): string {
+  const parts = text.split("```");
+  for (let i = 0; i < parts.length; i += 2) {
+    let p = parts[i]!;
+    p = p.replace(FILLER, "");
+    p = p.replace(/\bI(?=\b|'m|'ll|'d|'ve)/g, "i");
+    p = p.replace(/\b(Sui|Solana|Walrus|Tatum|Telegram|Cetus|Raydium|Jupiter|Tide)\b/g, (w) => w.toLowerCase());
+    p = p.replace(/(^|[.!?]\s+|\n\s*)([A-Z])(?=[a-z])/g, (_m, lead: string, c: string) => lead + c.toLowerCase());
+    p = p.replace(/ {2,}/g, " ").replace(/ ([,.!?])/g, "$1");
+    parts[i] = p;
+  }
+  return parts.join("```");
+}
+
 export function cleanReply(raw: string): string {
   let t = raw.replace(THINK_BLOCK, "").replace(THINK_OPEN, "");
   t = t.replace(/^\s*(tide|assistant)\s*:\s*/i, "");
   t = replaceDashPauses(t);
+  t = enforceVoice(t);
   return t.replace(/\n{3,}/g, "\n\n").trim();
 }
 
