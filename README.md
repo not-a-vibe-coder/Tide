@@ -51,7 +51,7 @@ Three learning loops read from it:
 
 **Wipe test:** `/rebuild` (admin only) deletes the local cache and replays every event from Walrus Memory. Budgets, positions, reasons, mutes and track records all come back.
 
-**Tatum Sui gRPC** (`sui-mainnet-grpc.gateway.tatum.io`, native gRPC over HTTP/2) reads Sui balances and coin metadata, falling back to Tatum's Sui JSON-RPC. **Tatum Solana RPC** (`solana-mainnet.gateway.tatum.io`) reads SOL plus every SPL and Token-2022 balance, and tells token mints apart from wallets.
+**Tatum Sui gRPC** (`sui-mainnet-grpc.gateway.tatum.io`, native gRPC over HTTP/2) reads Sui balances and coin metadata, falling back to Tatum's Sui JSON-RPC. **Tatum Solana RPC** (`solana-mainnet.gateway.tatum.io`) reads SOL plus every SPL and Token-2022 balance, and tells token mints apart from wallets. Tatum's free plan blocks some Solana methods (`getBalance` is paid-only), so each call tries Tatum first and only a refused method goes to Solana's public RPC (`SOLANA_FALLBACK_RPC_URL`); `/doctor` shows which endpoint served each one.
 
 **GeckoTerminal** (free, no key) provides pool volume, price, market cap and liquidity. Tatum doesn't offer token market data for Sui. Calls are queued, cached for a minute and retried on rate limits.
 

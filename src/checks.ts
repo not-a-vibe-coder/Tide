@@ -83,10 +83,12 @@ export async function runChecks(
     }),
     ...(cfg.CHAINS.includes("solana")
       ? [
-          await check("Tatum Solana RPC", async () => {
+          await check("Solana RPC", async () => {
             if (!cfg.TATUM_API_KEY) throw new Error("TATUM_API_KEY is empty");
-            const b = await new SolanaReader(cfg.TATUM_SOLANA_RPC_URL, cfg.TATUM_API_KEY).balances(solWallet);
-            return `${b.length} balances read for ${solWallet.slice(0, 8)}…`;
+            const fallback = cfg.SOLANA_FALLBACK_RPC_URL === "none" ? null : cfg.SOLANA_FALLBACK_RPC_URL;
+            const reader = new SolanaReader(cfg.TATUM_SOLANA_RPC_URL, cfg.TATUM_API_KEY, undefined, fallback);
+            const b = await reader.balances(solWallet);
+            return `${b.length} balances read for ${solWallet.slice(0, 8)}… (${reader.describeSources()})`;
           }),
         ]
       : []),

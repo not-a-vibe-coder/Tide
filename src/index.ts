@@ -31,7 +31,8 @@ async function main() {
     rules.sui = { ...DEFAULT_SPIKE_RULES, minLiquidityUsd: cfg.MIN_LIQUIDITY_USD, minHourlyVolumeUsd: cfg.MIN_HOURLY_VOLUME_USD };
   }
   if (cfg.CHAINS.includes("solana")) {
-    readers.solana = new SolanaReader(cfg.TATUM_SOLANA_RPC_URL, cfg.TATUM_API_KEY, (mint) => market.symbol(mint));
+    const fallback = cfg.SOLANA_FALLBACK_RPC_URL === "none" ? null : cfg.SOLANA_FALLBACK_RPC_URL;
+    readers.solana = new SolanaReader(cfg.TATUM_SOLANA_RPC_URL, cfg.TATUM_API_KEY, (mint) => market.symbol(mint), fallback);
     rules.solana = {
       ...DEFAULT_SPIKE_RULES,
       minLiquidityUsd: cfg.SOLANA_MIN_LIQUIDITY_USD,

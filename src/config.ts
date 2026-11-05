@@ -28,6 +28,8 @@ const schema = z.object({
   TATUM_SUI_GRPC_URL: z.string().url().default("https://sui-mainnet-grpc.gateway.tatum.io"),
   TATUM_SUI_RPC_URL: z.string().url().default("https://sui-mainnet.gateway.tatum.io"),
   TATUM_SOLANA_RPC_URL: z.string().url().default("https://solana-mainnet.gateway.tatum.io"),
+  /** Used for any Solana call Tatum's plan doesn't allow. Set to "none" to use Tatum only. */
+  SOLANA_FALLBACK_RPC_URL: z.string().default("https://api.mainnet-beta.solana.com"),
 
   /** Chains to scan and read, comma-separated. */
   CHAINS: z

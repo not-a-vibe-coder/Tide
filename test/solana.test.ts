@@ -46,35 +46,73 @@ describe("chains", () => {
 describe("SolanaReader", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  const acct = (mint: string, amount: string, decimals: number) => ({
+    account: { data: { parsed: { info: { mint, tokenAmount: { amount, decimals } } } } },
+  });
+  const answer = (body: any) =>
+    body.method === "getAccountInfo"
+      ? { value: { lamports: 2_500_000_000 } }
+      : body.method === "getBalance"
+        ? { value: 2_500_000_000 }
+        : body.params[1].programId.startsWith("Tokenkeg")
+          ? { value: [acct(BONK, "100000", 5), acct(BONK, "50000", 5), acct(SOLANA_USDC, "0", 6)] }
+          : { value: [] };
+
   it("reads SOL plus SPL and Token-2022 balances through Tatum, summing per mint", async () => {
-    const calls: { method: string; headers: Record<string, string> }[] = [];
+    const calls: { url: string; method: string; headers: Record<string, string> }[] = [];
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (_url: string, init: RequestInit) => {
+      vi.fn(async (url: string, init: RequestInit) => {
         const body = JSON.parse(String(init.body));
-        calls.push({ method: body.method, headers: init.headers as Record<string, string> });
-        const acct = (mint: string, amount: string, decimals: number) => ({
-          account: { data: { parsed: { info: { mint, tokenAmount: { amount, decimals } } } } },
-        });
-        const result =
-          body.method === "getBalance"
-            ? { value: 2_500_000_000 }
-            : body.params[1].programId.startsWith("Tokenkeg")
-              ? { value: [acct(BONK, "100000", 5), acct(BONK, "50000", 5), acct(SOLANA_USDC, "0", 6)] }
-              : { value: [] };
-        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }));
+        calls.push({ url, method: body.method, headers: init.headers as Record<string, string> });
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: answer(body) }));
       }),
     );
-    const reader = new SolanaReader("https://solana-mainnet.gateway.tatum.io", "key", async (m) => (m === BONK ? "BONK" : null));
+    const reader = new SolanaReader("https://tatum", "key", async (m) => (m === BONK ? "BONK" : null), "https://public");
     const b = await reader.balances(WALLET);
     expect(b).toEqual([
       { coinType: SOL_MINT, raw: "2500000000" },
       { coinType: BONK, raw: "150000" },
     ]);
-    expect(calls.map((c) => c.method)).toEqual(["getBalance", "getTokenAccountsByOwner", "getTokenAccountsByOwner"]);
-    expect(calls[0]!.headers["x-api-key"]).toBe("key");
+    expect(calls.map((c) => c.method)).toEqual(["getAccountInfo", "getTokenAccountsByOwner", "getTokenAccountsByOwner"]);
+    expect(calls.every((c) => c.url === "https://tatum" && c.headers["x-api-key"] === "key")).toBe(true);
     expect(await reader.coinInfo(BONK)).toEqual({ symbol: "BONK", decimals: 5 });
     expect(await reader.coinInfo(SOL_MINT)).toEqual({ symbol: "SOL", decimals: 9 });
+  });
+
+  it("uses the public RPC only for methods Tatum's free plan blocks, and remembers them", async () => {
+    const paidOnly = new Set(["getAccountInfo", "getBalance"]);
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body));
+        calls.push(`${url === "https://tatum" ? "tatum" : "public"}:${body.method}`);
+        if (url === "https://tatum" && paidOnly.has(body.method)) {
+          return new Response(
+            JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32601, message: `Method '${body.method}' is available for paid plans only.` } }),
+          );
+        }
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: answer(body) }));
+      }),
+    );
+    const reader = new SolanaReader("https://tatum", "key", undefined, "https://public");
+    expect((await reader.balances(WALLET))[0]).toEqual({ coinType: SOL_MINT, raw: "2500000000" });
+    expect(reader.describeSources()).toContain("getAccountInfo via public rpc");
+    expect(reader.describeSources()).toContain("getTokenAccountsByOwner via tatum");
+
+    calls.length = 0;
+    await reader.balances(WALLET);
+    expect(calls).toEqual(["public:getAccountInfo", "tatum:getTokenAccountsByOwner", "tatum:getTokenAccountsByOwner"]);
+  });
+
+  it("surfaces both errors when there's no fallback to try", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { message: "available for paid plans only" } }))),
+    );
+    const reader = new SolanaReader("https://tatum", "key", undefined, null);
+    await expect(reader.balances(WALLET)).rejects.toThrow("paid plans only");
   });
 });
 
