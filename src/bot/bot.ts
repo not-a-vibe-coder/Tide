@@ -1,5 +1,6 @@
 import { Bot, InlineKeyboard, type Context } from "grammy";
 import { parseSuiAddress } from "../chain/sui.js";
+import type { CheckResult } from "../checks.js";
 import { log } from "../log.js";
 import type { AlertAction, Button, Notifier, Tide } from "../tide.js";
 import { esc, shortAddress, usd } from "./format.js";
@@ -29,7 +30,12 @@ function keyboard(buttons?: Button[][]): InlineKeyboard | undefined {
   return kb;
 }
 
-export function createBot(token: string, tide: Tide, adminIds: number[]): Bot {
+export function createBot(
+  token: string,
+  tide: Tide,
+  adminIds: number[],
+  runDoctor?: (wallet?: string) => Promise<CheckResult[]>,
+): Bot {
   const bot = new Bot(token);
   const awaitingBudget = new Set<number>();
 
@@ -159,6 +165,18 @@ export function createBot(token: string, tide: Tide, adminIds: number[]): Bot {
   bot.command("memory", async (ctx) => {
     ensureUser(ctx);
     await reply(ctx, tide.memoryReport(ctx.from!.id));
+  });
+
+  bot.command("doctor", async (ctx) => {
+    if (!adminIds.includes(ctx.from!.id)) {
+      return reply(ctx, `Only the bot admin can run checks. Your Telegram ID is <code>${ctx.from!.id}</code>.`);
+    }
+    if (!runDoctor) return reply(ctx, "Checks aren't available in this build.");
+    await reply(ctx, "Checking Telegram, Tatum, GeckoTerminal and a real Walrus Memory write…");
+    const user = tide.store.getUser(ctx.from!.id);
+    const results = await runDoctor(user?.wallet ?? undefined);
+    const lines = results.map((r) => `${r.ok ? "✅" : "❌"} <b>${esc(r.name)}</b>: ${esc(r.detail)}`);
+    await reply(ctx, lines.join("\n"));
   });
 
   bot.command("rebuild", async (ctx) => {

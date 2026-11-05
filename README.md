@@ -92,6 +92,7 @@ No Walrus keys yet? Set `MEMWAL_DRY_RUN=true` to run without writes.
 | `/scan` | Scan Sui for spikes now |
 | `/alerts on\|off\|reset` | Pause alerts or unmute token classes |
 | `/memory` | What Tide remembers, plus Walrus write counts |
+| `/doctor` | Check Telegram, Tatum, GeckoTerminal and a real Walrus write (admin only; non-admins see their Telegram ID) |
 | `/rebuild` | Wipe test (admin only) |
 
 ## Deploy
