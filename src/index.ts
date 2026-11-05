@@ -20,7 +20,7 @@ async function main() {
     serverUrl: cfg.MEMWAL_SERVER_URL,
     dryRun: cfg.MEMWAL_DRY_RUN,
   });
-  const sui = new SuiReader(cfg.TATUM_SUI_GRPC_URL, cfg.TATUM_API_KEY);
+  const sui = new SuiReader(cfg.TATUM_SUI_GRPC_URL, cfg.TATUM_API_KEY, cfg.TATUM_SUI_RPC_URL);
   const market = new Market(cfg.GECKOTERMINAL_BASE_URL);
   const tide = new Tide(store, memory, sui, market, {
     ...DEFAULT_SPIKE_RULES,
@@ -90,6 +90,17 @@ async function main() {
   log.info("Tide is running");
   await bot.start({ drop_pending_updates: true });
 }
+
+// A dropped socket inside a network library shouldn't take the bot down.
+const NETWORK_CODES = new Set(["ECONNRESET", "ETIMEDOUT", "EPIPE", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"]);
+process.on("uncaughtException", (err: NodeJS.ErrnoException) => {
+  if (err.code && NETWORK_CODES.has(err.code)) {
+    log.warn(`network error ignored: ${err.code} ${err.message}`);
+    return;
+  }
+  log.error("fatal", err);
+  process.exit(1);
+});
 
 main().catch((err) => {
   log.error(err instanceof Error ? err.message : err);

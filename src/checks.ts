@@ -1,3 +1,4 @@
+import { delegateKeyToPublicKey } from "@mysten-incubation/memwal";
 import { Bot } from "grammy";
 import { SuiReader } from "./chain/sui.js";
 import type { Config } from "./config.js";
@@ -11,6 +12,18 @@ export interface CheckResult {
   name: string;
   ok: boolean;
   detail: string;
+}
+
+async function describeCredentials(privateKey: string, accountId: string): Promise<string> {
+  const lines = [`Account ID in use: ${accountId}`];
+  try {
+    const pub = await delegateKeyToPublicKey(privateKey);
+    lines.push(`Public key from your MEMWAL_PRIVATE_KEY: ${Buffer.from(pub).toString("hex")}`);
+    lines.push("That public key must appear under Delegate keys for this account on memory.walrus.xyz.");
+  } catch (err) {
+    lines.push(`MEMWAL_PRIVATE_KEY can't be read as a key: ${err instanceof Error ? err.message : err}`);
+  }
+  return lines.join("\n");
 }
 
 const SAMPLE_WALLET = "0x0000000000000000000000000000000000000000000000000000000000000005";
@@ -32,8 +45,9 @@ export async function runChecks(cfg: Config, wallet: string = SAMPLE_WALLET): Pr
     }),
     await check("Tatum Sui gRPC", async () => {
       if (!cfg.TATUM_API_KEY) throw new Error("TATUM_API_KEY is empty");
-      const b = await new SuiReader(cfg.TATUM_SUI_GRPC_URL, cfg.TATUM_API_KEY).balances(wallet);
-      return `${b.length} balances read for ${wallet.slice(0, 10)}…`;
+      const reader = new SuiReader(cfg.TATUM_SUI_GRPC_URL, cfg.TATUM_API_KEY, cfg.TATUM_SUI_RPC_URL);
+      const b = await reader.balances(wallet);
+      return `${b.length} balances read for ${wallet.slice(0, 10)}… via ${reader.lastTransport}`;
     }),
     await check("GeckoTerminal", async () => {
       const m = new Market(cfg.GECKOTERMINAL_BASE_URL);
@@ -55,7 +69,11 @@ export async function runChecks(cfg: Config, wallet: string = SAMPLE_WALLET): Pr
       memory.record(null, { type: "preference", key: "doctor_check", value: new Date().toISOString() });
       await memory.flush();
       const row = store.db.prepare("SELECT status, error FROM memory_log").get() as { status: string; error: string | null };
-      if (row.status !== "confirmed") throw new Error(`test write ${row.status}: ${row.error ?? "unknown error"}`);
+      if (row.status !== "confirmed") {
+        // Show the public half of the key so it can be compared with the dashboard. Never the private key.
+        const ids = await describeCredentials(cfg.MEMWAL_PRIVATE_KEY, cfg.MEMWAL_ACCOUNT_ID);
+        throw new Error(`test write ${row.status}: ${row.error ?? "unknown error"}\n${ids}`);
+      }
       return "test write confirmed on Mainnet";
     }),
   ];

@@ -26,6 +26,7 @@ const schema = z.object({
 
   TATUM_API_KEY: z.string().optional().default(""),
   TATUM_SUI_GRPC_URL: z.string().url().default("https://sui-mainnet-grpc.gateway.tatum.io"),
+  TATUM_SUI_RPC_URL: z.string().url().default("https://sui-mainnet.gateway.tatum.io"),
 
   GECKOTERMINAL_BASE_URL: z.string().url().default("https://api.geckoterminal.com/api/v2"),
 
