@@ -118,6 +118,19 @@ async function main() {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, service: "tide", startedAt, memory: store.memoryStats() }));
     }).listen(Number(process.env.PORT), "0.0.0.0", () => log.info(`health endpoint on :${process.env.PORT}`));
+
+    // Render's free plan sleeps after 15 minutes without inbound traffic, and
+    // Telegram polling is outbound, so the bot pings its own public URL every
+    // 10 minutes (the same trick Jasmine uses). Render sets RENDER_EXTERNAL_URL.
+    const selfUrl = process.env.KEEP_AWAKE_URL ?? process.env.RENDER_EXTERNAL_URL;
+    if (selfUrl) {
+      const ping = () =>
+        fetch(selfUrl, { signal: AbortSignal.timeout(30_000) })
+          .then((r) => log.debug(`keep-awake ping ${r.status}`))
+          .catch((e) => log.warn(`keep-awake ping failed: ${e instanceof Error ? e.message : e}`));
+      setInterval(ping, 10 * 60_000);
+      log.info(`keeping awake by pinging ${selfUrl} every 10 minutes`);
+    }
   }
 
   log.info("Tide is running");

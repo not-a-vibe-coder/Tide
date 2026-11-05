@@ -113,7 +113,7 @@ You don't need them. Plain words work for every setting and action, in English o
 
 ## Deploy
 
-Tide uses long polling, so it runs on any always-on Node host. On Railway or Render: create a service from this repo, set the build command to `npm install && npm run build`, the start command to `npm start`, add the `.env` variables, and attach a persistent volume at `./data` for the cache. If the volume is lost, `/rebuild` restores it from Walrus Memory.
+Tide uses long polling, so it runs on any always-on Node host. On Render's free web service it pings its own public URL (`RENDER_EXTERNAL_URL`, set by Render) every 10 minutes, because the free plan sleeps after 15 minutes without inbound traffic and Telegram polling doesn't count. Set `KEEP_AWAKE_URL` to override. On Railway or Render: create a service from this repo, set the build command to `npm install && npm run build`, the start command to `npm start`, add the `.env` variables, and attach a persistent volume at `./data` for the cache. If the volume is lost, `/rebuild` restores it from Walrus Memory.
 
 ## Development
 
