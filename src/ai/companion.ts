@@ -2,7 +2,8 @@ import { isCash } from "../core/buys.js";
 import { CHAIN_LABEL, chainOf } from "../core/chains.js";
 import { assessRisk, classifyToken } from "../core/spike.js";
 import { startOfWeekLagos, trackRecordMultiplier } from "../core/sizing.js";
-import type { TokenClass } from "../core/types.js";
+import { describeSafety, readSafety, type TokenSafety } from "../core/safety.js";
+import type { Pool, RiskCheck, TokenClass } from "../core/types.js";
 import { pct, shortAddress, usd } from "../bot/format.js";
 import type { Market } from "../market/gecko.js";
 import type { Store } from "../memory/store.js";
@@ -20,6 +21,8 @@ const MARKET_QUESTION = /\b(top \d+|top tokens?|top coins?|leading|trending|hott
 
 export interface Sizer {
   sizingFor(user: NonNullable<ReturnType<Store["getUser"]>>, tokenClass: TokenClass, riskMultiplier: number): { maxUsd: number } | null;
+  /** Market risk plus on-chain safety (Solana). Falls back to the market check alone. */
+  riskFor?(pool: Pool): Promise<RiskCheck & { safety: TokenSafety | null }>;
 }
 
 /**
@@ -154,8 +157,19 @@ export class Companion {
         if (shared.total >= 3) extra.push(`across all tide users, ${classLabel(cls)} were up 24h after ${shared.wins} of ${shared.total} alerts`);
         const outcomes = this.store.outcomes(userId, cls);
         if (outcomes.length) extra.push(`their own record on ${classLabel(cls)}: ${outcomes.slice(-10).filter(Boolean).length} of the last ${Math.min(10, outcomes.length)} up after 24h`);
+        const risk = this.sizer.riskFor ? await this.sizer.riskFor(pool).catch(() => null) : null;
+        if (risk?.safety) {
+          extra.push(describeSafety(risk.safety));
+          const read = readSafety(risk.safety);
+          if (read.flags.length) extra.push(`on-chain red flags (mention these first, they're the classic rug levers): ${read.flags.join("; ")}`);
+          if (read.strengths.length) extra.push(`on-chain good signs: ${read.strengths.join("; ")}`);
+          extra.push(`combined risk including on-chain safety: ${risk.label}, multiplier ${risk.multiplier}`);
+        } else if (pool.chain === "solana") {
+          extra.push("couldn't read the on-chain mint safety for this one right now");
+        }
+        if (pool.chain === "sui") extra.push("on-chain authority checks aren't available on sui, so only market data was checked");
         if (user) {
-          const size = this.sizer.sizingFor(user, cls, assessRisk(pool).multiplier);
+          const size = this.sizer.sizingFor(user, cls, (risk ?? assessRisk(pool)).multiplier);
           extra.push(size ? `their max size on this one by their own rules: ${usd(size.maxUsd)} (nfa)` : "they have no budget set, so no size");
         }
         out.push(describeToken(pool, extra));

@@ -192,6 +192,17 @@ describe("Tide with Sui and Solana wallets", () => {
     expect(store.getSnapshot(1)!.some((b) => b.coinType === "0x2::sui::SUI")).toBe(true);
   });
 
+  it("puts on-chain red flags into Solana alerts and cuts the size", async () => {
+    const { tide, pools, sent, sol } = setup();
+    (sol as any).tokenSafety = async () => ({ mintable: true, freezable: false, extensions: [], transferFeeBps: null, topHolderPct: 20, next10Pct: 10 });
+    tide.start(1, 1);
+    tide.setBudget(1, 40);
+    pools.solana = [pool({ chain: "solana", address: "solX", baseCoinType: BONK, baseSymbol: "BONK" })];
+    expect(await tide.scan()).toBe(1);
+    expect(sent.at(-1)).toContain("can print more tokens");
+    expect(sent.at(-1)).toContain("keep it under <b>$5</b>"); // 40 × 25% × 1 × 0.5
+  });
+
   it("scans both chains and respects a per-chain mute", async () => {
     const { tide, pools, sent } = setup();
     tide.start(1, 1);

@@ -1,4 +1,5 @@
 import { SOL_MINT } from "../core/chains.js";
+import type { TokenSafety } from "../core/safety.js";
 import type { Balance } from "../core/types.js";
 import type { CoinInfo } from "./sui.js";
 
@@ -71,6 +72,56 @@ export class SolanaReader {
       { encoding: "jsonParsed" },
     ]);
     return !!res.value && TOKEN_PROGRAMS.includes(res.value.owner) && res.value.data.parsed?.type === "mint";
+  }
+
+  private readonly safetyCache = new Map<string, { at: number; value: TokenSafety | null }>();
+
+  /** Mint and freeze authority, Token-2022 features and holder concentration. Cached for an hour. */
+  async tokenSafety(mint: string): Promise<TokenSafety | null> {
+    const hit = this.safetyCache.get(mint);
+    if (hit && Date.now() - hit.at < 60 * 60_000) return hit.value;
+    let value: TokenSafety | null = null;
+    try {
+      const acc = await this.rpc<{
+        value: {
+          owner: string;
+          data: {
+            parsed?: {
+              type?: string;
+              info?: {
+                mintAuthority: string | null;
+                freezeAuthority: string | null;
+                supply: string;
+                extensions?: { extension: string; state?: { newerTransferFee?: { transferFeeBasisPoints?: number } } }[];
+              };
+            };
+          };
+        } | null;
+      }>("getAccountInfo", [mint, { encoding: "jsonParsed" }]);
+      const info = acc.value?.data.parsed?.info;
+      if (info && acc.value?.data.parsed?.type === "mint") {
+        const extensions = (info.extensions ?? []).map((e) => e.extension).filter((e) => e !== "metadataPointer" && e !== "tokenMetadata");
+        const fee = info.extensions?.find((e) => e.extension === "transferFeeConfig")?.state?.newerTransferFee?.transferFeeBasisPoints ?? null;
+        let topHolderPct: number | null = null;
+        let next10Pct: number | null = null;
+        try {
+          const largest = await this.rpc<{ value: { amount: string }[] }>("getTokenLargestAccounts", [mint]);
+          const supply = Number(info.supply);
+          if (supply > 0 && largest.value.length) {
+            const amounts = largest.value.map((a) => Number(a.amount)).sort((a, b) => b - a);
+            topHolderPct = (amounts[0]! / supply) * 100;
+            next10Pct = (amounts.slice(1, 11).reduce((x, y) => x + y, 0) / supply) * 100;
+          }
+        } catch {
+          /* holder data is a bonus; authorities alone are still worth reporting */
+        }
+        value = { mintable: !!info.mintAuthority, freezable: !!info.freezeAuthority, extensions, transferFeeBps: fee, topHolderPct, next10Pct };
+      }
+    } catch {
+      value = null;
+    }
+    this.safetyCache.set(mint, { at: Date.now(), value });
+    return value;
   }
 
   async coinInfo(mint: string): Promise<CoinInfo> {

@@ -3,7 +3,8 @@ import { STABLECOINS, SUI_COIN_TYPE, diffBalances, isCash, normaliseCoinType, to
 import { SOL_MINT, chainOf, type Chain } from "./core/chains.js";
 import { proposeBudget, startOfWeekLagos, suggestSize, trackRecordMultiplier } from "./core/sizing.js";
 import { DEFAULT_LAUNCH_RULES, DEFAULT_SPIKE_RULES, assessRisk, detectLaunch, detectSpike, type LaunchRules, type SpikeRules } from "./core/spike.js";
-import type { Pool, SizingResult, Spike, TokenClass } from "./core/types.js";
+import { readSafety, type TokenSafety } from "./core/safety.js";
+import type { Pool, RiskCheck, SizingResult, Spike, TokenClass } from "./core/types.js";
 import { NO_REASON, alertMessage, esc, holdingLine, pct, usd, type HoldingView } from "./bot/format.js";
 import type { CoinInfo } from "./chain/sui.js";
 import { log } from "./log.js";
@@ -34,6 +35,8 @@ export interface ChainReader {
   coinInfo(token: string): Promise<CoinInfo>;
   /** Solana only: tells a token mint from a wallet, since both are plain base58 addresses. */
   isMint?(address: string): Promise<boolean>;
+  /** Solana only: mint/freeze authority, Token-2022 features, holder concentration. */
+  tokenSafety?(mint: string): Promise<TokenSafety | null>;
 }
 
 export type Readers = Partial<Record<Chain, ChainReader>>;
@@ -296,6 +299,7 @@ export class Tide {
     let sent = 0;
     for (const spike of spikes) {
       this.store.markPoolAlerted(spike.pool.address);
+      const risk = await this.riskFor(spike.pool);
       const isLaunch = spike.kind === "launch";
       for (const user of this.store.usersWithAlerts()) {
         if (this.store.getPref(user.id, `mute_chain_${spike.pool.chain}`) === "true") continue;
@@ -307,7 +311,7 @@ export class Tide {
           if (this.store.getPref(user.id, `mute_${spike.tokenClass}`) === "true") continue;
           if (this.store.recentAlertCount(user.id, dayAgo, "spike") >= MAX_ALERTS_PER_DAY) continue;
         }
-        await this.sendAlert(user, spike);
+        await this.sendAlert(user, spike, risk);
         sent++;
       }
     }
@@ -338,8 +342,26 @@ export class Tide {
     });
   }
 
-  private async sendAlert(user: User, spike: Spike) {
-    const risk = assessRisk(spike.pool);
+  /**
+   * Market risk check, plus on-chain safety for Solana tokens (mint and
+   * freeze authority, Token-2022 features, holder concentration).
+   */
+  async riskFor(pool: Pool): Promise<RiskCheck & { safety: TokenSafety | null }> {
+    const market = assessRisk(pool);
+    const safety = pool.chain === "solana" ? ((await this.readers.solana?.tokenSafety?.(pool.baseCoinType).catch(() => null)) ?? null) : null;
+    if (!safety) return { ...market, safety: null };
+    const read = readSafety(safety);
+    const multiplier = Math.round(Math.max(0.25, Math.min(1, market.multiplier * read.multiplier)) * 100) / 100;
+    return {
+      multiplier,
+      label: multiplier >= 0.75 ? "lower" : multiplier >= 0.5 ? "medium" : "high",
+      flags: [...read.flags, ...market.flags],
+      strengths: [...read.strengths, ...market.strengths],
+      safety,
+    };
+  }
+
+  private async sendAlert(user: User, spike: Spike, risk: RiskCheck) {
     const sizing = this.sizingFor(user, spike.tokenClass, risk.multiplier);
     const shared = this.store.sharedWinRate(spike.tokenClass);
     const sharedNote =
