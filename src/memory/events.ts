@@ -42,6 +42,8 @@ export type EventData =
       risk: number;
       trackRecord: number;
       reasons: string[];
+      /** "launch" for a fresh-launch alert. Older events have no kind and count as spikes. */
+      kind?: "spike" | "launch";
     }
   | { type: "alert_action"; alertId: string; symbol: string; action: "bought" | "skipped" | "not_for_me" }
   | { type: "alert_outcome"; alertId: string; symbol: string; tokenClass: TokenClass; changePct: number }
@@ -103,7 +105,7 @@ export function describe(e: TideEvent): string {
     case "position_closed":
       return `${who} closed ${d.symbol}${d.pnlPct === null ? "" : ` at ${d.pnlPct.toFixed(1)}%`}`;
     case "alert_sent":
-      return `Alert to ${who} on ${d.symbol} (${d.tokenClass} token): ${d.reasons.join("; ")}. Risk ${d.risk}, suggested max ${usd(d.sizeUsd)}`;
+      return `${d.kind === "launch" ? "Launch alert" : "Alert"} to ${who} on ${d.symbol} (${d.tokenClass} token): ${d.reasons.join("; ")}. Risk ${d.risk}, suggested max ${usd(d.sizeUsd)}`;
     case "alert_action":
       return `${who} ${d.action.replace(/_/g, " ")} the ${d.symbol} alert`;
     case "alert_outcome":

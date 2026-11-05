@@ -1,6 +1,6 @@
 import { MemWalMock } from "@mysten-incubation/memwal";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SolanaReader } from "../src/chain/solana.js";
+import { SolanaReader, TOKEN_PROGRAMS } from "../src/chain/solana.js";
 import type { CoinInfo } from "../src/chain/sui.js";
 import { isCash } from "../src/core/buys.js";
 import { SOLANA_USDC, SOL_MINT, chainOf, parseSolanaAddress } from "../src/core/chains.js";
@@ -44,6 +44,10 @@ describe("chains", () => {
 });
 
 describe("SolanaReader", () => {
+  it("uses the official SPL Token and Token-2022 program IDs (from @solana/spl-token)", () => {
+    expect(TOKEN_PROGRAMS).toEqual(["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"]);
+  });
+
   afterEach(() => vi.unstubAllGlobals());
 
   const acct = (mint: string, amount: string, decimals: number) => ({

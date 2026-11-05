@@ -66,6 +66,7 @@ async function main() {
     { command: "check", description: "look for new buys in your wallets" },
     { command: "budget", description: "how much you'll risk a week" },
     { command: "alerts", description: "pause me, or pick sui, solana or both" },
+    { command: "launches", description: "ping me on brand-new token launches" },
     { command: "memory", description: "what i remember about you" },
     { command: "help", description: "everything i can do" },
   ]);

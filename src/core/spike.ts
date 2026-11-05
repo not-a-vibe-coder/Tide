@@ -94,3 +94,31 @@ export function assessRisk(pool: Pool, now: Date = new Date()): RiskCheck {
   const label = multiplier >= 0.75 ? "lower" : multiplier >= 0.5 ? "medium" : "high";
   return { multiplier, label, flags };
 }
+
+export interface LaunchRules {
+  /** Only pools younger than this count as a fresh launch. */
+  maxAgeMinutes: number;
+  minLiquidityUsd: number;
+  /** Real buyers already showing up in the first hour. */
+  minBuysH1: number;
+}
+
+export const DEFAULT_LAUNCH_RULES: LaunchRules = { maxAgeMinutes: 60, minLiquidityUsd: 5_000, minBuysH1: 10 };
+
+/**
+ * A fresh launch: a pool created in the last hour that already has some
+ * liquidity and buyers. Filters out the empty pools most launches start as.
+ */
+export function detectLaunch(pool: Pool, rules: LaunchRules = DEFAULT_LAUNCH_RULES, now = new Date()): Spike | null {
+  if (!pool.createdAt) return null;
+  const ageMin = (now.getTime() - pool.createdAt.getTime()) / 60_000;
+  if (ageMin < 0 || ageMin > rules.maxAgeMinutes) return null;
+  if (pool.liquidityUsd < rules.minLiquidityUsd) return null;
+  if (pool.txH1.buys < rules.minBuysH1) return null;
+  const mins = Math.max(1, Math.round(ageMin));
+  const reasons = [
+    `the pool went live ${mins} minute${mins === 1 ? "" : "s"} ago`,
+    `${pool.txH1.buys} buys and ${pool.txH1.sells} sells so far`,
+  ];
+  return { kind: "launch", pool, tokenClass: "new", volumeMultiple: 0, reasons };
+}

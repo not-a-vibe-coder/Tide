@@ -23,6 +23,8 @@ export interface Pool {
 export type TokenClass = "new" | "established";
 
 export interface Spike {
+  /** "spike" = an existing pool suddenly moving; "launch" = a pool created minutes ago. */
+  kind?: "spike" | "launch";
   pool: Pool;
   tokenClass: TokenClass;
   /** Last-hour volume divided by the average hourly volume over 24h. */

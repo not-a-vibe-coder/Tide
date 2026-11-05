@@ -105,6 +105,8 @@ export class Store {
   private migrate() {
     const cols = (this.db.prepare("PRAGMA table_info(users)").all() as { name: string }[]).map((c) => c.name);
     if (!cols.includes("sol_wallet")) this.db.exec("ALTER TABLE users ADD COLUMN sol_wallet TEXT");
+    const alertCols = (this.db.prepare("PRAGMA table_info(alerts)").all() as { name: string }[]).map((c) => c.name);
+    if (!alertCols.includes("kind")) this.db.exec("ALTER TABLE alerts ADD COLUMN kind TEXT NOT NULL DEFAULT 'spike'");
   }
 
   /** Apply an event to the cache. Idempotent: an event already applied is skipped. */
@@ -154,10 +156,10 @@ export class Store {
         if (uid === null) break;
         this.db
           .prepare(
-            `INSERT OR IGNORE INTO alerts (id, user_id, pool_address, coin_type, symbol, token_class, price_usd, size_usd, sent_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT OR IGNORE INTO alerts (id, user_id, pool_address, coin_type, symbol, token_class, price_usd, size_usd, sent_at, kind)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run(d.alertId, uid, d.poolAddress, d.coinType, d.symbol, d.tokenClass, d.priceUsd, d.sizeUsd, e.at);
+          .run(d.alertId, uid, d.poolAddress, d.coinType, d.symbol, d.tokenClass, d.priceUsd, d.sizeUsd, e.at, d.kind ?? "spike");
         break;
       case "alert_action":
         this.db.prepare("UPDATE alerts SET action = ? WHERE id = ?").run(d.action, d.alertId);
@@ -322,10 +324,12 @@ export class Store {
     return { wins: r.wins ?? 0, total: r.total };
   }
 
-  recentAlertCount(userId: number, since: Date): number {
-    const r = this.db.prepare("SELECT COUNT(*) n FROM alerts WHERE user_id = ? AND sent_at >= ?").get(userId, since.toISOString()) as {
-      n: number;
-    };
+  recentAlertCount(userId: number, since: Date, kind?: "spike" | "launch"): number {
+    const r = (
+      kind
+        ? this.db.prepare("SELECT COUNT(*) n FROM alerts WHERE user_id = ? AND sent_at >= ? AND kind = ?").get(userId, since.toISOString(), kind)
+        : this.db.prepare("SELECT COUNT(*) n FROM alerts WHERE user_id = ? AND sent_at >= ?").get(userId, since.toISOString())
+    ) as { n: number };
     return r.n;
   }
 

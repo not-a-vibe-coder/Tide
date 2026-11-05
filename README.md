@@ -13,9 +13,10 @@ Built for the [Walrus × Tatum Total Recall](https://recall-tatum-walrus.vercel.
 3. **Buys:** every 30 minutes Tide compares your balances with the last snapshot. A new token in your wallet is a buy, and Tide asks one question: *why did you buy it?*
 4. **Holdings:** `/holdings` and a 9am digest show gain or loss since each buy, next to the reason you gave. If you bought for volume and volume has dropped 30%+, Tide tells you.
 5. **Spike alerts:** every 5 minutes Tide scans trending and new pools on Sui and Solana (Solana needs at least $50k liquidity and $50k hourly volume, since it's far busier). A pool whose last hour is 3× its average hour, or whose price (and market cap) jumped 20%+ in an hour, triggers an alert with a risk check and a suggested max size.
-6. **Feedback:** tap **Bought**, **Skipped** or **Not for me**. 24 hours later Tide records how the token did. That outcome feeds your track record.
-7. **Ask about any token:** "why shouldn't i buy $WIF?", "thoughts on scoop", or paste a Sui coin type or Solana mint. Tide looks it up live (price, market cap, liquidity, volume, pool age, buy/sell pressure, its own risk check), gives you the red flags first, then what's genuinely good, then your max size by your own rules. It never predicts prices or tells you to buy or sell.
-8. **Just talk to it:** ask anything in plain words ("how's scoop doing?", "should i go bigger on this one?", or in pidgin). Tide answers like a friend texting, using your real budget, positions, buy reasons and track record, plus memories recalled from Walrus.
+6. **Fresh launches (opt-in):** `/launches on` pings you when a token launches on Sui or Solana and, within its first hour, already has real liquidity and buyers (Sui: $5k and 10 buys, Solana: $20k and 30 buys). At most one per chain per scan and six a day. Tide sees launches once they hit a DEX, so it's not a sniper.
+7. **Feedback:** tap **Bought**, **Skipped** or **Not for me**. 24 hours later Tide records how the token did. That outcome feeds your track record.
+8. **Ask about any token:** "why shouldn't i buy $WIF?", "thoughts on scoop", or paste a Sui coin type or Solana mint. Tide looks it up live (price, market cap, liquidity, volume, pool age, buy/sell pressure, its own risk check), gives you the red flags first, then what's genuinely good, then your max size by your own rules. It never predicts prices or tells you to buy or sell.
+9. **Just talk to it:** ask anything in plain words ("how's scoop doing?", "should i go bigger on this one?", or in pidgin). Tide answers like a friend texting, using your real budget, positions, buy reasons and track record, plus memories recalled from Walrus.
 
 ### Voice
 
@@ -100,6 +101,7 @@ No Walrus keys yet? Set `MEMWAL_DRY_RUN=true` to run without writes.
 | `/scan` | Scan Sui for spikes now |
 | `/alerts on\|off\|reset` | Pause alerts or unmute token classes |
 | `/alerts sui\|solana\|both` | Choose which chains you get alerts for |
+| `/launches on\|off` | Alerts for brand-new token launches (off by default) |
 | `/memory` | What Tide remembers, plus Walrus write counts |
 | `/doctor` | Check Telegram, Tatum, GeckoTerminal and a real Walrus write (admin only; non-admins see their Telegram ID) |
 | `/rebuild` | Wipe test (admin only) |

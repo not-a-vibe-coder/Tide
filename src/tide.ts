@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { STABLECOINS, SUI_COIN_TYPE, diffBalances, isCash, normaliseCoinType, toUnits } from "./core/buys.js";
 import { SOL_MINT, chainOf, type Chain } from "./core/chains.js";
 import { proposeBudget, startOfWeekLagos, suggestSize, trackRecordMultiplier } from "./core/sizing.js";
-import { DEFAULT_SPIKE_RULES, assessRisk, detectSpike, type SpikeRules } from "./core/spike.js";
+import { DEFAULT_LAUNCH_RULES, DEFAULT_SPIKE_RULES, assessRisk, detectLaunch, detectSpike, type LaunchRules, type SpikeRules } from "./core/spike.js";
 import type { SizingResult, Spike, TokenClass } from "./core/types.js";
 import { NO_REASON, alertMessage, esc, holdingLine, pct, usd, type HoldingView } from "./bot/format.js";
 import type { CoinInfo } from "./chain/sui.js";
@@ -43,6 +43,17 @@ export type ChainRules = Partial<Record<Chain, SpikeRules>>;
 
 /** Alerts per chain per scan, so one busy chain can't crowd out the other. */
 const SPIKES_PER_CHAIN = 2;
+/** Fresh-launch alerts per chain per scan, and per person per day. Launches are opt-in (/launches on). */
+const LAUNCHES_PER_CHAIN = 1;
+const MAX_LAUNCHES_PER_DAY = 6;
+
+export type ChainLaunchRules = Partial<Record<Chain, LaunchRules>>;
+
+/** Solana launches far more tokens, most of them empty, so its bar is higher. */
+export const DEFAULT_CHAIN_LAUNCH_RULES: ChainLaunchRules = {
+  sui: DEFAULT_LAUNCH_RULES,
+  solana: { maxAgeMinutes: 60, minLiquidityUsd: 20_000, minBuysH1: 30 },
+};
 
 export class Tide {
   private notifier: Notifier | null = null;
@@ -55,6 +66,7 @@ export class Tide {
     private readonly readers: Readers,
     private readonly market: Market,
     private readonly rules: ChainRules = { sui: DEFAULT_SPIKE_RULES },
+    private readonly launchRules: ChainLaunchRules = DEFAULT_CHAIN_LAUNCH_RULES,
   ) {}
 
   /** Chains this instance scans and reads. */
@@ -262,24 +274,39 @@ export class Tide {
         log.warn(`${chain} pools failed: ${err instanceof Error ? err.message : err}`);
         return [];
       });
-      spikes.push(
-        ...pools
-          .map((p) => detectSpike(p, this.rules[chain]))
-          .filter((s): s is Spike => s !== null)
-          .filter((s) => !this.store.poolOnCooldown(s.pool.address, POOL_COOLDOWN_MS))
-          .sort((a, b) => b.pool.volumeUsd.h1 - a.pool.volumeUsd.h1)
-          .slice(0, SPIKES_PER_CHAIN),
-      );
+      const fresh = (s: Spike) => !this.store.poolOnCooldown(s.pool.address, POOL_COOLDOWN_MS);
+      const chainSpikes = pools
+        .map((p) => detectSpike(p, this.rules[chain]))
+        .filter((s): s is Spike => s !== null)
+        .filter(fresh)
+        .sort((a, b) => b.pool.volumeUsd.h1 - a.pool.volumeUsd.h1)
+        .slice(0, SPIKES_PER_CHAIN);
+      const spiking = new Set(chainSpikes.map((s) => s.pool.address));
+      const launches = pools
+        .filter((p) => !spiking.has(p.address))
+        .map((p) => detectLaunch(p, this.launchRules[chain] ?? DEFAULT_LAUNCH_RULES))
+        .filter((s): s is Spike => s !== null)
+        .filter(fresh)
+        .sort((a, b) => b.pool.liquidityUsd - a.pool.liquidityUsd)
+        .slice(0, LAUNCHES_PER_CHAIN);
+      spikes.push(...chainSpikes, ...launches);
     }
     if (failures === this.chains.length && failures > 0) throw new Error("market data unavailable");
 
     let sent = 0;
     for (const spike of spikes) {
       this.store.markPoolAlerted(spike.pool.address);
+      const isLaunch = spike.kind === "launch";
       for (const user of this.store.usersWithAlerts()) {
-        if (this.store.getPref(user.id, `mute_${spike.tokenClass}`) === "true") continue;
         if (this.store.getPref(user.id, `mute_chain_${spike.pool.chain}`) === "true") continue;
-        if (this.store.recentAlertCount(user.id, new Date(Date.now() - 24 * HOUR)) >= MAX_ALERTS_PER_DAY) continue;
+        const dayAgo = new Date(Date.now() - 24 * HOUR);
+        if (isLaunch) {
+          if (this.store.getPref(user.id, "launches") !== "true") continue;
+          if (this.store.recentAlertCount(user.id, dayAgo, "launch") >= MAX_LAUNCHES_PER_DAY) continue;
+        } else {
+          if (this.store.getPref(user.id, `mute_${spike.tokenClass}`) === "true") continue;
+          if (this.store.recentAlertCount(user.id, dayAgo, "spike") >= MAX_ALERTS_PER_DAY) continue;
+        }
         await this.sendAlert(user, spike);
         sent++;
       }
@@ -320,12 +347,13 @@ export class Tide {
       risk: Math.round(risk.multiplier * 100) / 100,
       trackRecord: sizing?.trackRecord ?? 1,
       reasons: spike.reasons,
+      kind: spike.kind ?? "spike",
     });
     await this.notify(user.chatId, alertMessage(spike, risk, sizing, sharedNote), [
       [
-        { text: "Bought", data: `act:bought:${alertId}` },
-        { text: "Skipped", data: `act:skipped:${alertId}` },
-        { text: "Not for me", data: `act:not_for_me:${alertId}` },
+        { text: "bought", data: `act:bought:${alertId}` },
+        { text: "skipped", data: `act:skipped:${alertId}` },
+        { text: "not for me", data: `act:not_for_me:${alertId}` },
       ],
     ]);
   }
@@ -353,6 +381,11 @@ export class Tide {
         this.memory.record(userId, { type: "preference", key: `mute_chain_${c}`, value: muted });
       }
     }
+  }
+
+  /** Opt in or out of fresh-launch alerts. */
+  setLaunches(userId: number, on: boolean) {
+    this.memory.record(userId, { type: "preference", key: "launches", value: on ? "true" : "false" });
   }
 
   unmuteAll(userId: number) {

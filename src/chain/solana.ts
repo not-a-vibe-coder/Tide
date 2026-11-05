@@ -2,9 +2,9 @@ import { SOL_MINT } from "../core/chains.js";
 import type { Balance } from "../core/types.js";
 import type { CoinInfo } from "./sui.js";
 
-const TOKEN_PROGRAMS = [
+export const TOKEN_PROGRAMS = [
   "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", // SPL Token
-  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PNnBqCXEiPxN6m", // Token-2022
+  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", // Token-2022
 ];
 
 interface ParsedTokenAccount {

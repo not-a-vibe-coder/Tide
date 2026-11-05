@@ -135,7 +135,9 @@ export class Companion {
     }
 
     if (user) {
-      lines.push(`Alerts: ${user.alertsOn ? "on" : "paused"}.`);
+      lines.push(`Alerts: ${user.alertsOn ? "on" : "paused"}. Fresh launch alerts: ${this.store.getPref(userId, "launches") === "true" ? "on" : "off (/launches on)"}.`);
+      const chainsMuted = (["sui", "solana"] as const).filter((c) => this.store.getPref(userId, `mute_chain_${c}`) === "true");
+      if (chainsMuted.length) lines.push(`They don't get alerts for: ${chainsMuted.join(", ")}.`);
       const muted = (["new", "established"] as const).filter((c) => this.store.getPref(userId, `mute_${c}`) === "true");
       if (muted.length) lines.push(`They muted alerts for: ${muted.map(classLabel).join(", ")}.`);
 

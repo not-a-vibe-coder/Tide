@@ -18,6 +18,7 @@ const HELP = [
   "/share <code>25</code> · what % of what's left i size each alert from",
   "/alerts on, off or reset · pause me, or unmute token types",
   "/alerts sui, solana or both · which chains you hear about",
+  "/launches on or off · ping me when a new token launches (riskiest stuff, off by default)",
   "/wallet <code>address</code> · add or change a sui or solana wallet",
   "/memory · everything i remember about you",
   "",
@@ -198,6 +199,24 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
       tide.setAlertChains(ctx.from!.id, ["sui", "solana"]);
       await reply(ctx, "you'll hear about sui and solana.");
     } else await reply(ctx, "use /alerts on, off, reset, or sui, solana, both.");
+  });
+
+  bot.command("launches", async (ctx) => {
+    ensureUser(ctx);
+    const arg = (ctx.match ?? "").trim().toLowerCase();
+    if (arg === "on") {
+      tide.setLaunches(ctx.from!.id, true);
+      return reply(
+        ctx,
+        "okay, i'll ping you when a new token launches on sui or solana and already has real liquidity and buyers. at most a few a day. these are the riskiest thing i send, most go to zero, so treat every one as money you can lose. /launches off to stop.",
+      );
+    }
+    if (arg === "off") {
+      tide.setLaunches(ctx.from!.id, false);
+      return reply(ctx, "no more launch alerts. you'll still get the usual ones when something starts moving.");
+    }
+    const on = tide.store.getPref(ctx.from!.id, "launches") === "true";
+    await reply(ctx, `launch alerts are ${on ? "on" : "off"}. use /launches on or /launches off.`);
   });
 
   bot.command("memory", async (ctx) => {
