@@ -1,5 +1,6 @@
 import { normaliseCoinType } from "../core/buys.js";
 import { CHAINS, GECKO_NETWORK, chainOf, type Chain } from "../core/chains.js";
+import { parseOhlcv, type Candle } from "../core/history.js";
 import type { Pool } from "../core/types.js";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -201,6 +202,40 @@ export class Market {
       if (out.length >= n) break;
     }
     return out;
+  }
+
+  /** Hourly candles for a pool, oldest first: up to `limit` hours back. */
+  async hourlyCandles(chain: Chain, poolAddress: string, limit = 168): Promise<Candle[]> {
+    const res = await this.get<{ data?: { attributes?: { ohlcv_list?: number[][] } } }>(
+      `/networks/${GECKO_NETWORK[chain]}/pools/${encodeURIComponent(poolAddress)}/ohlcv/hour?aggregate=1&limit=${limit}&currency=usd`,
+    );
+    return parseOhlcv(res.data?.attributes?.ohlcv_list ?? []);
+  }
+
+  /**
+   * Pools to learn from: trending, recently launched and top-volume pools,
+   * one per token. Recent launches are included on purpose so the history
+   * isn't only the survivors.
+   */
+  async historyCandidates(chain: Chain): Promise<Pool[]> {
+    const net = GECKO_NETWORK[chain];
+    const paths = [
+      `/networks/${net}/trending_pools?page=1&duration=24h`,
+      `/networks/${net}/trending_pools?page=2&duration=24h`,
+      `/networks/${net}/new_pools?page=1`,
+      `/networks/${net}/new_pools?page=2`,
+      `/networks/${net}/pools?page=1&sort=h24_volume_usd_desc`,
+    ];
+    const results = await Promise.allSettled(paths.map((p) => this.get<{ data: RawPool[] }>(p)));
+    const byToken = new Map<string, Pool>();
+    for (const r of results) {
+      if (r.status !== "fulfilled") continue;
+      for (const p of r.value.data.map(normalisePool)) {
+        const prev = byToken.get(p.baseCoinType);
+        if (p.baseCoinType && (!prev || p.liquidityUsd > prev.liquidityUsd)) byToken.set(p.baseCoinType, p);
+      }
+    }
+    return [...byToken.values()];
   }
 
   /** Every pool a token trades in, most liquid first. Cached for a minute. */

@@ -51,6 +51,8 @@ Three learning loops read from it:
 2. **Taste:** *Not for me* mutes that token class (brand-new pools or established tokens).
 3. **Thesis check:** your stored reason for each buy is compared with live data.
 
+**Market history backfill:** a new user has no track record, so Tide learns from the past first. It replays its own spike and launch rules over the last week of real hourly candles (GeckoTerminal OHLCV) for about 25 pools per chain, trending, recently launched and top-volume, so the history isn't only survivors, and records what each signal did over the next 24 hours. These go to the shared `tide-tokens` namespace on Walrus, marked as history, with stable IDs so re-runs never double-count. Until someone has 5 results of their own, their track record starts from this history, softened halfway toward neutral, and every alert says so. It runs a minute after startup when shared memory is thin, then daily at 04:17 Lagos time; `/backfill` (admin) runs it on demand.
+
 **Wipe test:** `/rebuild` (admin only) deletes the local cache and replays every event from Walrus Memory. Budgets, positions, reasons, mutes and track records all come back.
 
 **Tatum Sui gRPC** (`sui-mainnet-grpc.gateway.tatum.io`, native gRPC over HTTP/2) reads Sui balances and coin metadata, falling back to Tatum's Sui JSON-RPC. **Tatum Solana RPC** (`solana-mainnet.gateway.tatum.io`) reads SOL plus every SPL and Token-2022 balance, and tells token mints apart from wallets. Tatum's free plan blocks some Solana methods (`getBalance` is paid-only), so each call tries Tatum first and only a refused method goes to Solana's public RPC (`SOLANA_FALLBACK_RPC_URL`); `/doctor` shows which endpoint served each one.
@@ -109,6 +111,7 @@ You don't need them. Plain words work for every setting and action, in English o
 | `/launches on\|off` | Alerts for brand-new token launches (off by default) |
 | `/memory` | What Tide remembers, plus Walrus write counts |
 | `/doctor` | Check Telegram, Tatum, GeckoTerminal and a real Walrus write (admin only; non-admins see their Telegram ID) |
+| `/backfill` | Replay a week of market history into shared memory (admin only) |
 | `/rebuild` | Wipe test (admin only) |
 
 ## Deploy

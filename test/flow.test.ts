@@ -116,7 +116,7 @@ describe("Tide end to end", () => {
     const later = sent.at(-1)!.html;
     expect(later).toContain("track record 0.5");
     expect(later).toContain("keep it under <b>$5</b>");
-    expect(later).toContain("established tokens were up 24h later on 0 of 6 alerts");
+    expect(later).toContain("established tokens were up 24h later on 0 of 6 signals like this");
 
     // "Not for me" mutes the class.
     const alertId = sent.at(-1)!.buttons![0]![2]!.data.split(":")[2]!;

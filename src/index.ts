@@ -100,6 +100,15 @@ async function main() {
   cron.schedule("7 * * * *", guard("outcomes", () => tide.resolveOutcomes()), tz);
   cron.schedule(`0 ${cfg.DIGEST_HOUR_LAGOS} * * *`, guard("digest", () => tide.sendDigests()), tz);
 
+  // Learn from market history: once a day, and a minute after startup if shared memory is thin.
+  const backfill = guard("backfill", async () => {
+    const summary = await tide.backfill();
+    log.info(`backfill: ${summary.map((s) => `${s.chain} ${s.pools} pools → ${s.outcomes} outcomes (${s.up} up)`).join(", ")}`);
+  });
+  cron.schedule("17 4 * * *", backfill, tz);
+  const shared = store.outcomeSources();
+  if (shared.history + shared.live < 20) setTimeout(backfill, 60_000);
+
   let runner: RunnerHandle | undefined;
   const stop = async () => {
     log.info("shutting down, finishing Walrus writes…");

@@ -107,6 +107,8 @@ export class Store {
     if (!cols.includes("sol_wallet")) this.db.exec("ALTER TABLE users ADD COLUMN sol_wallet TEXT");
     const alertCols = (this.db.prepare("PRAGMA table_info(alerts)").all() as { name: string }[]).map((c) => c.name);
     if (!alertCols.includes("kind")) this.db.exec("ALTER TABLE alerts ADD COLUMN kind TEXT NOT NULL DEFAULT 'spike'");
+    const outCols = (this.db.prepare("PRAGMA table_info(token_outcomes)").all() as { name: string }[]).map((c) => c.name);
+    if (!outCols.includes("source")) this.db.exec("ALTER TABLE token_outcomes ADD COLUMN source TEXT NOT NULL DEFAULT 'live'");
   }
 
   /** Apply an event to the cache. Idempotent: an event already applied is skipped. */
@@ -175,8 +177,8 @@ export class Store {
         break;
       case "token_outcome":
         this.db
-          .prepare("INSERT OR IGNORE INTO token_outcomes (id, coin_type, token_class, change_pct, at) VALUES (?, ?, ?, ?, ?)")
-          .run(e.id, d.coinType, d.tokenClass, d.changePct, e.at);
+          .prepare("INSERT OR IGNORE INTO token_outcomes (id, coin_type, token_class, change_pct, at, source) VALUES (?, ?, ?, ?, ?, ?)")
+          .run(e.id, d.coinType, d.tokenClass, d.changePct, d.signalAt ?? e.at, d.source ?? "live");
         break;
     }
     return true;
@@ -322,6 +324,12 @@ export class Store {
       .prepare("SELECT COUNT(*) total, SUM(CASE WHEN change_pct > 0 THEN 1 ELSE 0 END) wins FROM token_outcomes WHERE token_class = ?")
       .get(tokenClass) as { total: number; wins: number | null };
     return { wins: r.wins ?? 0, total: r.total };
+  }
+
+  /** How many shared outcomes came from replayed market history vs live alerts. */
+  outcomeSources(): { live: number; history: number } {
+    const rows = this.db.prepare("SELECT source, COUNT(*) n FROM token_outcomes GROUP BY source").all() as { source: string; n: number }[];
+    return { live: rows.find((r) => r.source === "live")?.n ?? 0, history: rows.find((r) => r.source === "history")?.n ?? 0 };
   }
 
   recentAlertCount(userId: number, since: Date, kind?: "spike" | "launch"): number {

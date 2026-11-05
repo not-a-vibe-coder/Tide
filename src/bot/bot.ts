@@ -337,6 +337,19 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
     });
   });
 
+  bot.command("backfill", async (ctx) => {
+    if (!adminIds.includes(ctx.from!.id)) return reply(ctx, "only the admin can run a backfill.");
+    await reply(ctx, "replaying the last week of real price history on sui and solana. this takes a few minutes, i'll report back.");
+    background(ctx, "backfill", async () => {
+      const summary = await tide.backfill();
+      const lines = summary.map(
+        (s) => `${CHAIN_LABEL[s.chain]}: ${s.pools} pools, ${s.outcomes} signals, ${s.outcomes ? Math.round((s.up / s.outcomes) * 100) : 0}% were up 24h later`,
+      );
+      const src = tide.store.outcomeSources();
+      await reply(ctx, ["<b>backfill done</b>", ...lines, "", `shared memory now holds ${src.history} history outcomes and ${src.live} live ones, saving to walrus.`].join("\n"));
+    });
+  });
+
   bot.command("rebuild", async (ctx) => {
     if (!adminIds.includes(ctx.from!.id)) return reply(ctx, "only the admin can run a rebuild.");
     await reply(ctx, "wiping my local memory and rebuilding it from walrus…");

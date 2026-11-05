@@ -47,7 +47,7 @@ export function alertMessage(spike: Spike, risk: RiskCheck, sizing: SizingResult
   if (sizing && sizing.maxUsd > 0) {
     lines.push(
       `if you go in, i'd keep it under <b>${usd(sizing.maxUsd)}</b>. nfa.`,
-      `<i>${usd(sizing.budgetLeftUsd)} left this week × ${Math.round(sizing.baseShare * 100)}% × track record ${sizing.trackRecord} × risk ${sizing.riskMultiplier}</i>`,
+      `<i>${usd(sizing.budgetLeftUsd)} left this week × ${Math.round(sizing.baseShare * 100)}% × track record ${sizing.trackRecord}${sizing.trackRecordFrom === "market" ? " (from market history until you have 5 results)" : ""} × risk ${sizing.riskMultiplier}</i>`,
     );
   } else if (sizing) {
     lines.push("your budget for this week is already used up, so i'm not suggesting a size. nfa.");

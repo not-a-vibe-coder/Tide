@@ -48,7 +48,18 @@ export type EventData =
   | { type: "alert_action"; alertId: string; symbol: string; action: "bought" | "skipped" | "not_for_me" }
   | { type: "alert_outcome"; alertId: string; symbol: string; tokenClass: TokenClass; changePct: number }
   | { type: "preference"; key: string; value: string }
-  | { type: "token_outcome"; coinType: string; symbol: string; tokenClass: TokenClass; changePct: number };
+  | {
+      type: "token_outcome";
+      coinType: string;
+      symbol: string;
+      tokenClass: TokenClass;
+      changePct: number;
+      /** "history" = replayed from past candles; otherwise a live alert's outcome. */
+      source?: "live" | "history";
+      /** When the signal fired, for history outcomes. */
+      signalAt?: string;
+      kind?: "spike" | "launch";
+    };
 
 export type EventType = EventData["type"];
 
@@ -77,8 +88,8 @@ export const userNamespace = (userId: number) => `tide-user-${userId}`;
 export const namespaceFor = (e: Pick<TideEvent, "userId">) =>
   e.userId === null ? SHARED_NAMESPACE : userNamespace(e.userId);
 
-export function newEvent(userId: number | null, data: EventData, at: Date = new Date()): TideEvent {
-  return { id: randomUUID(), userId, at: at.toISOString(), data };
+export function newEvent(userId: number | null, data: EventData, at: Date = new Date(), id: string = randomUUID()): TideEvent {
+  return { id, userId, at: at.toISOString(), data };
 }
 
 const usd = (n: number | null | undefined) =>
@@ -113,7 +124,9 @@ export function describe(e: TideEvent): string {
     case "preference":
       return `${who} preference ${d.key} = ${d.value}`;
     case "token_outcome":
-      return `${d.symbol} (${d.tokenClass} token) moved ${d.changePct.toFixed(1)}% in the 24h after a spike alert`;
+      return d.source === "history"
+        ? `Market history: ${d.symbol} (${d.tokenClass} token) moved ${d.changePct.toFixed(1)}% in the 24h after a ${d.kind ?? "spike"} signal at ${d.signalAt ?? "unknown time"}`
+        : `${d.symbol} (${d.tokenClass} token) moved ${d.changePct.toFixed(1)}% in the 24h after a spike alert`;
   }
 }
 

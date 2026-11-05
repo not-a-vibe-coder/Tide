@@ -21,6 +21,8 @@ const MARKET_QUESTION = /\b(top \d+|top tokens?|top coins?|leading|trending|hott
 
 export interface Sizer {
   sizingFor(user: NonNullable<ReturnType<Store["getUser"]>>, tokenClass: TokenClass, riskMultiplier: number): { maxUsd: number } | null;
+  /** Their track record multiplier and where it comes from (their results or market history). */
+  trackRecord?(user: NonNullable<ReturnType<Store["getUser"]>>, tokenClass: TokenClass): { h: number; from: "you" | "market" | "default" };
   /** Market risk plus on-chain safety (Solana). Falls back to the market check alone. */
   riskFor?(pool: Pool): Promise<RiskCheck & { safety: TokenSafety | null }>;
 }
@@ -211,7 +213,8 @@ export class Companion {
 
       for (const cls of ["new", "established"] as const) {
         const outcomes = this.store.outcomes(userId, cls);
-        const h = trackRecordMultiplier(outcomes);
+        const tr = this.sizer.trackRecord?.(user, cls) ?? { h: trackRecordMultiplier(outcomes), from: "you" as const };
+        const h = `${tr.h}${tr.from === "market" ? " (borrowed from market history until they have 5 results of their own)" : ""}`;
         const wins = outcomes.slice(-10).filter(Boolean).length;
         const recent = Math.min(outcomes.length, 10);
         const record = outcomes.length ? `${wins} of the last ${recent} were up 24h later` : "no resolved alerts yet";
@@ -248,7 +251,7 @@ export class Companion {
 
     for (const cls of ["new", "established"] as const) {
       const s = this.store.sharedWinRate(cls);
-      if (s.total >= 3) lines.push(`Across all Tide users, ${classLabel(cls)} were up 24h after ${s.wins} of ${s.total} alerts.`);
+      if (s.total >= 3) lines.push(`Across market history and all Tide users, ${classLabel(cls)} were up 24h after ${s.wins} of ${s.total} signals.`);
     }
 
     lines.push(...(await this.marketOverview(userId, text)));

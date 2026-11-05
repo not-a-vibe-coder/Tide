@@ -14,6 +14,9 @@ import {
 } from "./events.js";
 import type { Store } from "./store.js";
 
+/** Parallel writes to the Walrus relayer. Keeps a big batch (like a history backfill) from tripping rate limits. */
+const WRITE_SLOTS = 4;
+
 export interface MemoryOptions {
   privateKey: string;
   accountId: string;
@@ -59,12 +62,28 @@ export class Memory {
     return "connected to Walrus Memory Mainnet relayer";
   }
 
-  record(userId: number | null, data: EventData): TideEvent {
-    const event = newEvent(userId, data);
-    this.store.apply(event);
+  /**
+   * Apply and persist an event. With a fixed `id`, re-recording the same fact
+   * is a no-op (used for history outcomes, so a re-run never double-counts).
+   */
+  record(userId: number | null, data: EventData, id?: string): TideEvent {
+    const event = newEvent(userId, data, new Date(), id);
+    if (!this.store.apply(event) && id) return event;
     const p = this.persist(event).finally(() => this.inflight.delete(p));
     this.inflight.add(p);
     return event;
+  }
+
+  /** Writes waiting for a slot; at most WRITE_SLOTS go to the relayer at once. */
+  private active = 0;
+  private readonly waiting: (() => void)[] = [];
+  private async slot(): Promise<() => void> {
+    if (this.active >= WRITE_SLOTS) await new Promise<void>((r) => this.waiting.push(r));
+    this.active++;
+    return () => {
+      this.active--;
+      this.waiting.shift()?.();
+    };
   }
 
   private async persist(event: TideEvent): Promise<void> {
@@ -74,6 +93,7 @@ export class Memory {
       log.debug("memory (dry run)", encodeEvent(event));
       return;
     }
+    const release = await this.slot();
     try {
       const job = await this.client.rememberAsync(encodeEvent(event), namespace, { idempotencyKey: event.id });
       this.store.logMemory(event.id, namespace, "queued", { jobId: job.job_id });
@@ -83,6 +103,8 @@ export class Memory {
       const message = err instanceof Error ? err.message : String(err);
       this.store.logMemory(event.id, namespace, "failed", { error: message });
       log.warn(`Walrus write failed for ${event.data.type} ${event.id}: ${message}`);
+    } finally {
+      release();
     }
   }
 

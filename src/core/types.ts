@@ -63,4 +63,6 @@ export interface SizingInputs {
 
 export interface SizingResult extends SizingInputs {
   maxUsd: number;
+  /** Where the track record came from: your own results, market history, or neutral. */
+  trackRecordFrom?: "you" | "market" | "default";
 }

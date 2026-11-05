@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { STABLECOINS, SUI_COIN_TYPE, diffBalances, isCash, normaliseCoinType, toUnits } from "./core/buys.js";
 import { SOL_MINT, chainOf, type Chain } from "./core/chains.js";
-import { proposeBudget, startOfWeekLagos, suggestSize, trackRecordMultiplier } from "./core/sizing.js";
+import { MIN_OUTCOMES_FOR_TRACK_RECORD, proposeBudget, startOfWeekLagos, suggestSize, trackRecordMultiplier } from "./core/sizing.js";
+import { replaySignals } from "./core/history.js";
 import { DEFAULT_LAUNCH_RULES, DEFAULT_SPIKE_RULES, assessRisk, detectLaunch, detectSpike, type LaunchRules, type SpikeRules } from "./core/spike.js";
 import { readSafety, type TokenSafety } from "./core/safety.js";
 import type { Pool, RiskCheck, SizingResult, Spike, TokenClass } from "./core/types.js";
@@ -46,6 +47,8 @@ export type ChainRules = Partial<Record<Chain, SpikeRules>>;
 
 /** Alerts per chain per scan, so one busy chain can't crowd out the other. */
 const SPIKES_PER_CHAIN = 2;
+/** Shared outcomes needed before new users start from the market's track record. */
+const MIN_SHARED_FOR_PRIOR = 20;
 /** Fresh-launch alerts per chain per scan, and per person per day. Launches are opt-in (/launches on). */
 const LAUNCHES_PER_CHAIN = 1;
 const MAX_LAUNCHES_PER_DAY = 6;
@@ -331,15 +334,81 @@ export class Tide {
     return out;
   }
 
+  /**
+   * Track record multiplier h. Your own results once you have 5; before that,
+   * how this kind of alert has done across the market and everyone on Tide,
+   * softened halfway toward 1 so a newcomer isn't judged on others' luck.
+   */
+  trackRecord(user: User, tokenClass: TokenClass): { h: number; from: "you" | "market" | "default" } {
+    const own = this.store.outcomes(user.id, tokenClass);
+    if (own.length >= MIN_OUTCOMES_FOR_TRACK_RECORD) return { h: trackRecordMultiplier(own), from: "you" };
+    const shared = this.store.sharedWinRate(tokenClass);
+    if (shared.total >= MIN_SHARED_FOR_PRIOR) {
+      const market = 0.5 + 0.7 * (shared.wins / shared.total);
+      return { h: Math.round(((1 + market) / 2) * 100) / 100, from: "market" };
+    }
+    return { h: 1, from: "default" };
+  }
+
   sizingFor(user: User, tokenClass: TokenClass, riskMultiplier: number): SizingResult | null {
     if (user.budgetUsd === null) return null;
     const spent = this.store.spentSince(user.id, startOfWeekLagos());
-    return suggestSize({
-      budgetLeftUsd: user.budgetUsd - spent,
-      baseShare: user.baseShare,
-      trackRecord: trackRecordMultiplier(this.store.outcomes(user.id, tokenClass)),
-      riskMultiplier: Math.round(riskMultiplier * 100) / 100,
-    });
+    const record = this.trackRecord(user, tokenClass);
+    return {
+      ...suggestSize({
+        budgetLeftUsd: user.budgetUsd - spent,
+        baseShare: user.baseShare,
+        trackRecord: record.h,
+        riskMultiplier: Math.round(riskMultiplier * 100) / 100,
+      }),
+      trackRecordFrom: record.from,
+    };
+  }
+
+  /**
+   * Learn from the past: replay Tide's spike and launch rules over the last
+   * week of real hourly candles for up to `poolsPerChain` pools per chain,
+   * and record what each signal did over the next 24 hours as shared memory.
+   */
+  async backfill(poolsPerChain = 25): Promise<{ chain: Chain; pools: number; outcomes: number; up: number }[]> {
+    const summary: { chain: Chain; pools: number; outcomes: number; up: number }[] = [];
+    for (const chain of this.chains) {
+      const rules = this.rules[chain] ?? DEFAULT_SPIKE_RULES;
+      let pools: Pool[] = [];
+      try {
+        pools = (await this.market.historyCandidates(chain))
+          .filter((p) => !isCash(p.baseCoinType) && p.liquidityUsd >= rules.minLiquidityUsd / 2)
+          .slice(0, poolsPerChain);
+      } catch (err) {
+        log.warn(`backfill ${chain}: ${err instanceof Error ? err.message : err}`);
+      }
+      let outcomes = 0;
+      let up = 0;
+      for (const p of pools) {
+        const candles = await this.market.hourlyCandles(chain, p.address).catch(() => []);
+        for (const sig of replaySignals(candles, p.createdAt, rules)) {
+          const at = new Date(sig.t * 1000).toISOString();
+          this.memory.record(
+            null,
+            {
+              type: "token_outcome",
+              coinType: p.baseCoinType,
+              symbol: p.baseSymbol,
+              tokenClass: sig.tokenClass,
+              changePct: sig.changePct,
+              source: "history",
+              signalAt: at,
+              kind: sig.kind,
+            },
+            `history:${chain}:${p.address}:${sig.t}`,
+          );
+          outcomes++;
+          if (sig.changePct > 0) up++;
+        }
+      }
+      summary.push({ chain, pools: pools.length, outcomes, up });
+    }
+    return summary;
   }
 
   /**
@@ -366,7 +435,7 @@ export class Tide {
     const shared = this.store.sharedWinRate(spike.tokenClass);
     const sharedNote =
       shared.total >= 5
-        ? `across everyone on tide, ${spike.tokenClass === "new" ? "brand-new pools" : "established tokens"} were up 24h later on ${shared.wins} of ${shared.total} alerts.`
+        ? `in recent market history and across everyone on tide, ${spike.tokenClass === "new" ? "brand-new pools" : "established tokens"} were up 24h later on ${shared.wins} of ${shared.total} signals like this.`
         : null;
     const alertId = randomUUID();
     this.memory.record(user.id, {
@@ -498,7 +567,10 @@ export class Tide {
       "",
       `<b>walrus memory</b> (${this.memory.isDryRun ? "dry run" : "mainnet"}), namespace <code>${ns}</code>`,
       `${stats.confirmed} stored · ${stats.queued} on the way · ${stats.failed} failed${stats.dry_run ? ` · ${stats.dry_run} dry run` : ""}`,
-      `shared token memory: ${this.store.eventCount(SHARED_NAMESPACE)} outcomes from everyone`,
+      (() => {
+        const src = this.store.outcomeSources();
+        return `shared token memory: ${src.live} outcomes from live alerts, ${src.history} from replayed market history`;
+      })(),
     ];
     return lines.join("\n");
   }
