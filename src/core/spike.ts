@@ -51,9 +51,15 @@ export function detectSpike(pool: Pool, rules: SpikeRules = DEFAULT_SPIKE_RULES,
   return { pool, tokenClass: classifyToken(pool, now), volumeMultiple, reasons };
 }
 
+const money = (n: number) =>
+  n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `$${Math.round(n / 1_000)}k` : `$${Math.round(n)}`;
+
 /**
- * Token risk multiplier r. Starts at 1 and is cut for thin liquidity,
- * a very young pool, and more sellers than buyers.
+ * Token risk multiplier r, plus the red flags and strengths behind it.
+ * Starts at 1 and is cut for each memecoin warning sign: thin liquidity, a
+ * very young pool, sell pressure, a valuation far bigger than the liquidity
+ * that backs it, volume far bigger than liquidity (wash trading), a pump
+ * that's already happened, and lots of trades from very few wallets.
  */
 export function assessRisk(pool: Pool, now: Date = new Date()): RiskCheck {
   let r = 1;
@@ -90,9 +96,55 @@ export function assessRisk(pool: Pool, now: Date = new Date()): RiskCheck {
     flags.push("most supply not yet circulating");
   }
 
-  const multiplier = Math.max(0.25, Math.min(1, r));
+  // Valuation vs the liquidity that actually backs it: the exit is only as big as the pool.
+  const cap = pool.marketCapUsd ?? pool.fdvUsd;
+  if (cap !== null && pool.liquidityUsd > 0) {
+    const ratio = cap / pool.liquidityUsd;
+    if (ratio > 200) {
+      r *= 0.5;
+      flags.push(`a ${money(cap)} valuation sits on only ${money(pool.liquidityUsd)} of liquidity, so selling moves the price hard`);
+    } else if (ratio > 50) {
+      r *= 0.75;
+      flags.push(`valuation is ${Math.round(ratio)}× the liquidity behind it`);
+    }
+  }
+
+  // Volume many times the pool's size is often the same money going round in circles.
+  if (pool.liquidityUsd > 0 && pool.volumeUsd.h24 > pool.liquidityUsd * 30) {
+    r *= 0.75;
+    flags.push(`24h volume is ${Math.round(pool.volumeUsd.h24 / pool.liquidityUsd)}× its liquidity, a common sign of wash trading`);
+  }
+
+  // Late to a pump: the people who were early are usually the ones selling to you.
+  if (pool.priceChangePct.h24 >= 300) {
+    r *= 0.75;
+    flags.push(`already up ${Math.round(pool.priceChangePct.h24)}% in 24h, late buyers often end up as exit liquidity`);
+  } else if (pool.priceChangePct.h1 >= 80) {
+    r *= 0.75;
+    flags.push(`up ${Math.round(pool.priceChangePct.h1)}% in the last hour alone`);
+  }
+  if (pool.priceChangePct.h1 <= -30) {
+    r *= 0.75;
+    flags.push(`down ${Math.round(-pool.priceChangePct.h1)}% in the last hour`);
+  }
+
+  // Lots of trades from very few wallets looks like bots, not people.
+  const { buyers } = pool.txH1;
+  if (buyers !== undefined && buys >= 50 && buyers < buys / 5) {
+    r *= 0.75;
+    flags.push(`${buys} buys in the last hour came from only ${buyers} wallets`);
+  }
+
+  const strengths: string[] = [];
+  if (pool.liquidityUsd >= 500_000) strengths.push(`deep liquidity (${money(pool.liquidityUsd)})`);
+  if (pool.createdAt && (now.getTime() - pool.createdAt.getTime()) / DAY_MS >= 30) strengths.push("pool has been trading for over a month");
+  if (buyers !== undefined && buyers >= 100) strengths.push(`${buyers} different wallets bought in the last hour`);
+  if (buys >= 20 && sells > 0 && buys >= sells * 1.3) strengths.push(`more buyers than sellers right now (${buys} vs ${sells})`);
+  if (cap !== null && pool.liquidityUsd > 0 && cap / pool.liquidityUsd <= 10) strengths.push("liquidity is healthy for its size");
+
+  const multiplier = Math.round(Math.max(0.25, Math.min(1, r)) * 100) / 100;
   const label = multiplier >= 0.75 ? "lower" : multiplier >= 0.5 ? "medium" : "high";
-  return { multiplier, label, flags };
+  return { multiplier, label, flags, strengths };
 }
 
 export interface LaunchRules {

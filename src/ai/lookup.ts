@@ -78,7 +78,10 @@ export function describeToken(p: Pool, extra: string[] = [], now = new Date()): 
     `  price change ${pct(p.priceChangePct.h1)} 1h, ${pct(p.priceChangePct.h6)} 6h, ${pct(p.priceChangePct.h24)} 24h`,
     `  last hour ${p.txH1.buys} buys vs ${p.txH1.sells} sells`,
     `  pool age ${ageDays === null ? "unknown" : `${ageDays} days`}, so it counts as ${cls === "new" ? "a brand-new pool" : "established"}`,
-    `  my risk check: ${risk.label} risk, multiplier ${risk.multiplier}${risk.flags.length ? `, red flags: ${risk.flags.join("; ")}` : ", no red flags from liquidity, age or sell pressure"}`,
+    `  my risk check: ${risk.label} risk, multiplier ${risk.multiplier}`,
+    `  red flags: ${risk.flags.length ? risk.flags.join("; ") : "none from liquidity, age, valuation, volume or trading pattern"}`,
+    `  in its favour: ${risk.strengths.length ? risk.strengths.join("; ") : "nothing that stands out"}`,
+    ...(p.txH1.buyers !== undefined ? [`  unique wallets last hour: ${p.txH1.buyers} buying, ${p.txH1.sellers ?? "?"} selling`] : []),
     `  spiking right now: ${spike ? spike.reasons.join(" and ") : "no"}`,
     ...extra.map((e) => `  ${e}`),
   ];

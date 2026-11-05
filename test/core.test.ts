@@ -80,7 +80,42 @@ describe("risk check", () => {
     );
     expect(r.multiplier).toBe(0.25);
     expect(r.label).toBe("high");
-    expect(r.flags).toHaveLength(3);
+    expect(r.flags).toEqual(expect.arrayContaining(["thin liquidity ($15,000)", "pool under 1 day old", "more sells than buys in 1h (40 vs 10)"]));
+  });
+});
+
+describe("memecoin red flags", () => {
+  const base = { liquidityUsd: 100_000, marketCapUsd: 1_000_000, fdvUsd: 1_000_000 };
+
+  it("flags a valuation far bigger than its liquidity", () => {
+    const r = assessRisk(pool({ ...base, liquidityUsd: 30_000, marketCapUsd: 9_000_000 }), NOW);
+    expect(r.flags.join(" ")).toContain("$9.0M valuation sits on only $30k of liquidity");
+  });
+
+  it("flags likely wash trading", () => {
+    const r = assessRisk(pool({ ...base, volumeUsd: { m5: 0, h1: 0, h6: 0, h24: 5_000_000 } }), NOW);
+    expect(r.flags.join(" ")).toContain("50× its liquidity");
+  });
+
+  it("flags a pump that already happened, and a dump in progress", () => {
+    expect(assessRisk(pool({ ...base, priceChangePct: { m5: 0, h1: 10, h6: 0, h24: 450 } }), NOW).flags.join(" ")).toContain("exit liquidity");
+    expect(assessRisk(pool({ ...base, priceChangePct: { m5: 0, h1: -45, h6: 0, h24: 0 } }), NOW).flags.join(" ")).toContain("down 45%");
+  });
+
+  it("flags many buys from very few wallets", () => {
+    const r = assessRisk(pool({ ...base, txH1: { buys: 300, sells: 40, buyers: 12, sellers: 9 } }), NOW);
+    expect(r.flags.join(" ")).toContain("300 buys in the last hour came from only 12 wallets");
+  });
+
+  it("lists real strengths for a healthy token", () => {
+    const r = assessRisk(
+      pool({ liquidityUsd: 2_000_000, marketCapUsd: 8_000_000, fdvUsd: 8_000_000, txH1: { buys: 400, sells: 200, buyers: 180, sellers: 90 } }),
+      NOW,
+    );
+    expect(r.flags).toEqual([]);
+    expect(r.strengths).toEqual(
+      expect.arrayContaining(["deep liquidity ($2.0M)", "pool has been trading for over a month", "180 different wallets bought in the last hour", "liquidity is healthy for its size"]),
+    );
   });
 });
 
@@ -126,7 +161,7 @@ describe("GeckoTerminal parsing", () => {
     expect(p.liquidityUsd).toBeCloseTo(45000.5);
     expect(p.volumeUsd.h1).toBe(25_000);
     expect(p.priceChangePct.h1).toBeCloseTo(34.5);
-    expect(p.txH1).toEqual({ buys: 90, sells: 40 });
+    expect(p.txH1).toEqual({ buys: 90, sells: 40, buyers: 60, sellers: 30 });
   });
 
   it("strips the network prefix from token ids", () => {

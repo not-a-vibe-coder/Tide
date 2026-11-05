@@ -32,7 +32,7 @@ interface RawPool {
     pool_created_at: string | null;
     volume_usd: Record<string, string | null>;
     price_change_percentage: Record<string, string | null>;
-    transactions: Record<string, { buys: number; sells: number } | undefined>;
+    transactions: Record<string, { buys: number; sells: number; buyers?: number; sellers?: number } | undefined>;
   };
   relationships?: {
     base_token?: { data?: { id: string } };
@@ -82,7 +82,12 @@ export function normalisePool(raw: RawPool): Pool {
       h6: num(a.price_change_percentage?.h6),
       h24: num(a.price_change_percentage?.h24),
     },
-    txH1: { buys: num(a.transactions?.h1?.buys), sells: num(a.transactions?.h1?.sells) },
+    txH1: {
+      buys: num(a.transactions?.h1?.buys),
+      sells: num(a.transactions?.h1?.sells),
+      ...(a.transactions?.h1?.buyers !== undefined ? { buyers: num(a.transactions.h1.buyers) } : {}),
+      ...(a.transactions?.h1?.sellers !== undefined ? { sellers: num(a.transactions.h1.sellers) } : {}),
+    },
   };
 }
 

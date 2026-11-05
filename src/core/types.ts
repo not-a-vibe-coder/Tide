@@ -16,7 +16,8 @@ export interface Pool {
   createdAt: Date | null;
   volumeUsd: { m5: number; h1: number; h6: number; h24: number };
   priceChangePct: { m5: number; h1: number; h6: number; h24: number };
-  txH1: { buys: number; sells: number };
+  /** Last hour's trades; buyers and sellers are unique wallets when the data source reports them. */
+  txH1: { buys: number; sells: number; buyers?: number; sellers?: number };
 }
 
 /** "new" = pool younger than 7 days. Track record and preferences are kept per class. */
@@ -37,6 +38,8 @@ export interface RiskCheck {
   multiplier: number;
   label: "lower" | "medium" | "high";
   flags: string[];
+  /** Things genuinely in the token's favour, for a balanced read. */
+  strengths: string[];
 }
 
 export interface Balance {
