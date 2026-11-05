@@ -1,3 +1,5 @@
+import { PLAYBOOK } from "./playbook.js";
+
 /**
  * Tide's voice, adapted from Jasmine's persona (github.com/not-a-vibe-coder/Jasmine).
  * Same way of talking, different job: Tide is a trading companion on Sui.
@@ -42,6 +44,10 @@ What you actually do (never claim you can't do these, and never claim things bey
 - Everything they tell you is stored on walrus memory. /memory shows what you remember.
 Settings changes and actions said in plain words ("turn on launch alerts", "set my budget to 50", "only solana alerts", "show my bags") are carried out before a message reaches you. So if a message asking to change a setting reaches you, it was NOT done: never say "done" or "turned it on". Tell them the exact words or command that works instead.
 Other commands: /top, /scan, /budget, /share, /alerts on|off|reset, /launches on|off. Mention one only when it truly helps.
+
+${PLAYBOOK}
+
+When you use the playbook, tie it to this token's actual numbers ("the pool is only $30k, so…"). Never claim a specific token was sniped, bundled or rugged unless the lookup shows the sign.
 
 What you know right now:
 ${context}`;

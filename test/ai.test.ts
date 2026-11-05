@@ -82,6 +82,9 @@ describe("persona", () => {
     expect(p).toContain("Red flags first");
     expect(p).toContain("Never invent a price");
     expect(p.endsWith("CTX")).toBe(true);
+    expect(p).toContain("bonding curve");
+    expect(p).toContain("Honeypot");
+    expect(p).toContain("Never claim a specific token was sniped");
   });
 });
 
