@@ -75,6 +75,17 @@ export class SuiReader {
     return res.map((b) => ({ coinType: normaliseCoinType(b.coinType), raw: b.totalBalance }));
   }
 
+  /** Move type of an object, or null if no object has this ID (for example, it's a wallet address). */
+  async objectType(objectId: string): Promise<string | null> {
+    try {
+      const res = await this.grpc.getObject({ objectId });
+      return res.object?.type ?? null;
+    } catch (err) {
+      if (/not.?found|does not exist|NOT_FOUND/i.test(errMsg(err))) return null;
+      throw err;
+    }
+  }
+
   async coinInfo(coinType: string): Promise<CoinInfo> {
     const key = normaliseCoinType(coinType);
     const hit = this.metaCache.get(key);

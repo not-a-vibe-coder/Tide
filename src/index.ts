@@ -30,7 +30,7 @@ async function main() {
 
   log.info("Walrus Memory:", await memory.health().catch((e) => `unreachable (${e.message})`));
 
-  const bot = createBot(cfg.TELEGRAM_BOT_TOKEN, tide, cfg.ADMIN_TELEGRAM_IDS, (wallet) => runChecks(cfg, wallet));
+  const bot = createBot(cfg.TELEGRAM_BOT_TOKEN, tide, cfg.ADMIN_TELEGRAM_IDS, (wallet) => runChecks(cfg, wallet, { market }));
   await bot.api.setMyCommands([
     { command: "start", description: "Start or see your status" },
     { command: "holdings", description: "Your positions and P&L" },

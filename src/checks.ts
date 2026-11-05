@@ -14,8 +14,21 @@ export interface CheckResult {
   detail: string;
 }
 
-async function describeCredentials(privateKey: string, accountId: string): Promise<string> {
+/** Explains a Walrus 401: which public key the private key maps to, and what the account ID really is on Sui. */
+async function describeCredentials(privateKey: string, accountId: string, sui: SuiReader): Promise<string> {
   const lines = [`Account ID in use: ${accountId}`];
+  try {
+    const type = await sui.objectType(accountId);
+    if (type === null) {
+      lines.push("On Sui, no object has that ID. It's probably a wallet address, not the account object ID.");
+    } else if (/memwal|account/i.test(type)) {
+      lines.push(`On Sui it's a ${shortType(type)} object, so the account ID looks right.`);
+    } else {
+      lines.push(`On Sui it's a ${shortType(type)} object, which doesn't look like a Walrus Memory account.`);
+    }
+  } catch (err) {
+    lines.push(`Couldn't look the account ID up on Sui: ${err instanceof Error ? err.message : err}`);
+  }
   try {
     const pub = await delegateKeyToPublicKey(privateKey);
     lines.push(`Public key from your MEMWAL_PRIVATE_KEY: ${Buffer.from(pub).toString("hex")}`);
@@ -24,6 +37,11 @@ async function describeCredentials(privateKey: string, accountId: string): Promi
     lines.push(`MEMWAL_PRIVATE_KEY can't be read as a key: ${err instanceof Error ? err.message : err}`);
   }
   return lines.join("\n");
+}
+
+function shortType(type: string): string {
+  const [addr, ...rest] = type.split("::");
+  return [addr && addr.length > 12 ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : addr, ...rest].join("::");
 }
 
 const SAMPLE_WALLET = "0x0000000000000000000000000000000000000000000000000000000000000005";
@@ -36,8 +54,15 @@ async function check(name: string, fn: () => Promise<string>): Promise<CheckResu
   }
 }
 
+export interface CheckDeps {
+  /** Reuse the running bot's market client so checks share its rate limiting. */
+  market?: Market;
+}
+
 /** Tests every outside connection with the configured keys, including one real Walrus write. */
-export async function runChecks(cfg: Config, wallet: string = SAMPLE_WALLET): Promise<CheckResult[]> {
+export async function runChecks(cfg: Config, wallet: string = SAMPLE_WALLET, deps: CheckDeps = {}): Promise<CheckResult[]> {
+  const sui = new SuiReader(cfg.TATUM_SUI_GRPC_URL, cfg.TATUM_API_KEY, cfg.TATUM_SUI_RPC_URL);
+  const market = deps.market ?? new Market(cfg.GECKOTERMINAL_BASE_URL);
   return [
     await check("Telegram", async () => {
       const me = await new Bot(cfg.TELEGRAM_BOT_TOKEN).api.getMe();
@@ -45,16 +70,14 @@ export async function runChecks(cfg: Config, wallet: string = SAMPLE_WALLET): Pr
     }),
     await check("Tatum Sui gRPC", async () => {
       if (!cfg.TATUM_API_KEY) throw new Error("TATUM_API_KEY is empty");
-      const reader = new SuiReader(cfg.TATUM_SUI_GRPC_URL, cfg.TATUM_API_KEY, cfg.TATUM_SUI_RPC_URL);
-      const b = await reader.balances(wallet);
-      return `${b.length} balances read for ${wallet.slice(0, 10)}… via ${reader.lastTransport}`;
+      const b = await sui.balances(wallet);
+      return `${b.length} balances read for ${wallet.slice(0, 10)}… via ${sui.lastTransport}`;
     }),
     await check("GeckoTerminal", async () => {
-      const m = new Market(cfg.GECKOTERMINAL_BASE_URL);
-      const pools = await m.candidatePools();
+      const pools = await market.candidatePools();
       const spikes = pools.filter((p) => detectSpike(p)).length;
-      const sui = await m.quote(SUI_COIN_TYPE);
-      return `${pools.length} Sui pools, ${spikes} spiking now, SUI at $${sui?.priceUsd.toFixed(3) ?? "?"}`;
+      const price = await market.quote(SUI_COIN_TYPE);
+      return `${pools.length} Sui pools, ${spikes} spiking now, SUI at $${price?.priceUsd.toFixed(3) ?? "?"}`;
     }),
     await check("Walrus Memory", async () => {
       const store = new Store(":memory:");
@@ -70,8 +93,8 @@ export async function runChecks(cfg: Config, wallet: string = SAMPLE_WALLET): Pr
       await memory.flush();
       const row = store.db.prepare("SELECT status, error FROM memory_log").get() as { status: string; error: string | null };
       if (row.status !== "confirmed") {
-        // Show the public half of the key so it can be compared with the dashboard. Never the private key.
-        const ids = await describeCredentials(cfg.MEMWAL_PRIVATE_KEY, cfg.MEMWAL_ACCOUNT_ID);
+        // Show only the public half of the key, so it can be compared with the dashboard.
+        const ids = await describeCredentials(cfg.MEMWAL_PRIVATE_KEY, cfg.MEMWAL_ACCOUNT_ID, sui);
         throw new Error(`test write ${row.status}: ${row.error ?? "unknown error"}\n${ids}`);
       }
       return "test write confirmed on Mainnet";

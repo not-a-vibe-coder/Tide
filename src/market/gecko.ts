@@ -2,6 +2,7 @@ import { normaliseCoinType } from "../core/buys.js";
 import type { Pool } from "../core/types.js";
 
 const NETWORK = "sui-network";
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 interface RawPool {
   id: string;
@@ -74,25 +75,52 @@ export class Market {
   constructor(
     private readonly baseUrl: string,
     private readonly minGapMs = 2_100,
+    private readonly backoffMs: number[] = [3_000, 8_000, 20_000],
   ) {}
 
-  private async get<T>(path: string): Promise<T> {
-    const wait = this.lastCall + this.minGapMs - Date.now();
-    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-    this.lastCall = Date.now();
-    const res = await fetch(`${this.baseUrl}${path}`, { headers: { accept: "application/json;version=20230302" } });
-    if (!res.ok) throw new Error(`GeckoTerminal ${res.status} on ${path}`);
-    return (await res.json()) as T;
+  /**
+   * Calls are queued so only one is in flight, spaced at least minGapMs apart.
+   * A 429 (rate limited) is retried with backoff, honouring Retry-After. Free
+   * hosts share outbound IPs, so 429s happen even when Tide itself is polite.
+   */
+  private queue: Promise<unknown> = Promise.resolve();
+
+  private get<T>(path: string): Promise<T> {
+    const run = this.queue.then(() => this.fetchWithRetry<T>(path));
+    this.queue = run.catch(() => undefined);
+    return run;
   }
 
-  /** Trending plus newly created Sui pools, de-duplicated. */
+  private async fetchWithRetry<T>(path: string): Promise<T> {
+    const backoff = this.backoffMs;
+    for (let attempt = 0; ; attempt++) {
+      const wait = this.lastCall + this.minGapMs - Date.now();
+      if (wait > 0) await sleep(wait);
+      this.lastCall = Date.now();
+      const res = await fetch(`${this.baseUrl}${path}`, {
+        headers: { accept: "application/json;version=20230302" },
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (res.ok) return (await res.json()) as T;
+      if (res.status === 429 && attempt < backoff.length) {
+        const retryAfter = Number(res.headers.get("retry-after"));
+        await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : backoff[attempt]!);
+        continue;
+      }
+      throw new Error(`GeckoTerminal ${res.status} on ${path}`);
+    }
+  }
+
+  /** Trending plus newly created Sui pools, de-duplicated. Works if either list loads. */
   async candidatePools(): Promise<Pool[]> {
-    const [trending, fresh] = await Promise.all([
+    const [trending, fresh] = await Promise.allSettled([
       this.get<{ data: RawPool[] }>(`/networks/${NETWORK}/trending_pools?page=1&duration=1h`),
       this.get<{ data: RawPool[] }>(`/networks/${NETWORK}/new_pools?page=1`),
     ]);
+    if (trending.status === "rejected" && fresh.status === "rejected") throw trending.reason;
+    const lists = [trending, fresh].flatMap((r) => (r.status === "fulfilled" ? r.value.data : []));
     const byAddress = new Map<string, Pool>();
-    for (const raw of [...trending.data, ...fresh.data]) {
+    for (const raw of lists) {
       const p = normalisePool(raw);
       if (p.baseCoinType) byAddress.set(p.address, p);
     }
