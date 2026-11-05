@@ -8,6 +8,7 @@ import type { CheckResult } from "../checks.js";
 import { log } from "../log.js";
 import type { AlertAction, Button, Notifier, Tide } from "../tide.js";
 import { esc, shortAddress, topList, usd } from "./format.js";
+import { parseIntent, type Intent } from "./intents.js";
 
 const HELP = [
   "i'm <b>tide</b>. i watch sui and solana for tokens that start moving, keep track of what you buy and why, and get stricter with you when your calls go bad. you can just talk to me too, or ask me about any token.",
@@ -23,6 +24,8 @@ const HELP = [
   "/launches on or off · ping me when a new token launches (riskiest stuff, off by default)",
   "/wallet <code>address</code> · add or change a sui or solana wallet",
   "/memory · everything i remember about you",
+  "",
+  "no commands needed, you can just say things like \"turn on launch alerts\", \"only solana alerts\", \"set my budget to 50\", \"show my bags\" or \"why shouldn't i buy $WIF\".",
   "",
   "what you tell me lives on walrus memory. nothing i say is financial advice.",
 ].join("\n");
@@ -136,14 +139,131 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
       ctx,
       [
         `hey${ctx.from?.first_name ? ` ${esc(ctx.from.first_name.toLowerCase())}` : ""}, i'm <b>tide</b>.`,
-        "i watch sui for tokens that start picking up volume, keep track of what you buy and why, and tell you how much i'd risk based on your own budget and record.",
+        "i watch sui and solana for tokens that start picking up volume, keep track of what you buy and why, and tell you how much i'd risk based on your own budget and record. you can talk to me normally, no commands needed.",
         "",
         "paste your <b>sui or solana wallet address</b> and we'll start. i only read public data, i'll never ask for keys or signatures.",
       ].join("\n"),
     );
   });
 
-  bot.command("help", (ctx) => reply(ctx, HELP));
+  // ---- actions, shared by slash commands and plain-language requests ----
+
+  const act = {
+    help: (ctx: Context) => reply(ctx, HELP),
+
+    budget: async (ctx: Context, amount: number | null) => {
+      if (amount === null || !Number.isFinite(amount) || amount <= 0) {
+        awaitingBudget.add(ctx.from!.id);
+        return reply(ctx, "how much are you happy to risk a week, in usd? just the number, like <code>30</code>.");
+      }
+      tide.setBudget(ctx.from!.id, amount);
+      return reply(ctx, `done, your weekly budget is <b>${usd(amount)}</b>.`);
+    },
+
+    share: (ctx: Context, p: number) => {
+      if (!Number.isFinite(p) || p < 5 || p > 50) return reply(ctx, "pick something between 5 and 50, like /share <code>25</code>.");
+      tide.setBaseShare(ctx.from!.id, p / 100);
+      return reply(ctx, `okay, each alert now starts from <b>${p}%</b> of what's left in your week.`);
+    },
+
+    holdings: async (ctx: Context) => reply(ctx, await tide.holdingsReport(ctx.from!.id)),
+
+    check: async (ctx: Context) => {
+      const user = tide.store.getUser(ctx.from!.id)!;
+      if (!user.wallet && !user.solWallet) return reply(ctx, "i need a wallet first, paste your sui or solana address here.");
+      const found = await tide.checkWallet(user).catch((err) => {
+        log.error("check failed", err);
+        return -1;
+      });
+      if (found < 0) return reply(ctx, "couldn't read your wallet just now. give it a minute and try again.");
+      if (found === 0) return reply(ctx, "nothing new since i last looked.");
+    },
+
+    scan: async (ctx: Context) => {
+      await ctx.replyWithChatAction("typing").catch(() => {});
+      background(ctx, "scan", async () => {
+        const n = await tide.scan().catch((err) => {
+          log.error("scan failed", err);
+          return -1;
+        });
+        if (n < 0) await reply(ctx, "the market data is being slow right now. try me again in a bit.");
+        else if (n === 0) await reply(ctx, `nothing's really moving on ${tide.chains.map((c) => CHAIN_LABEL[c]).join(" or ")} right now. i'll keep an eye out.`);
+      });
+    },
+
+    top: async (ctx: Context, chains?: Chain[]) => {
+      await ctx.replyWithChatAction("typing").catch(() => {});
+      background(ctx, "top", async () => {
+        const lists = await tide.topTokens(chains?.length ? chains : tide.chains);
+        const body = lists.map((l) => (l.error ? `couldn't load ${CHAIN_LABEL[l.chain]} right now.` : topList(l.chain, l.pools))).join("\n\n");
+        await reply(ctx, `${body}\n\nbig volume isn't the same as safe. ask me about any of these and i'll give you the red flags. nfa.`);
+      });
+    },
+
+    alerts: (ctx: Context, on: boolean) => {
+      tide.setAlerts(ctx.from!.id, on);
+      return reply(ctx, on ? "alerts are back on." : "okay, i'll stay quiet. tell me when you want alerts back.");
+    },
+
+    alertChains: (ctx: Context, chains: Chain[]) => {
+      tide.setAlertChains(ctx.from!.id, chains);
+      return reply(
+        ctx,
+        chains.length >= 2 ? "you'll hear about sui and solana." : `okay, only ${CHAIN_LABEL[chains[0]!]} alerts from now on. say "both chains" any time to hear about everything.`,
+      );
+    },
+
+    unmute: (ctx: Context) => {
+      tide.unmuteAll(ctx.from!.id);
+      return reply(ctx, "unmuted everything, you'll hear about all token types again.");
+    },
+
+    launches: (ctx: Context, on: boolean) => {
+      tide.setLaunches(ctx.from!.id, on);
+      return reply(
+        ctx,
+        on
+          ? "done, launch alerts are on. i'll ping you when a new token launches on sui or solana and already has real liquidity and buyers, a few a day at most. these are the riskiest thing i send, most go to zero, so treat every one as money you can lose. say \"stop launch alerts\" any time."
+          : "launch alerts are off. you'll still get the usual ones when something starts moving.",
+      );
+    },
+
+    memory: (ctx: Context) => reply(ctx, tide.memoryReport(ctx.from!.id)),
+  };
+
+  /** Run a plain-language request. */
+  const runIntent = (ctx: Context, i: Intent) => {
+    switch (i.action) {
+      case "launches":
+        return act.launches(ctx, i.on);
+      case "alerts":
+        return act.alerts(ctx, i.on);
+      case "alertChains":
+        return act.alertChains(ctx, i.chains);
+      case "unmute":
+        return act.unmute(ctx);
+      case "budget":
+        return act.budget(ctx, i.amount);
+      case "share":
+        return act.share(ctx, i.percent);
+      case "holdings":
+        return act.holdings(ctx);
+      case "check":
+        return act.check(ctx);
+      case "scan":
+        return act.scan(ctx);
+      case "top":
+        return act.top(ctx, i.chains);
+      case "memory":
+        return act.memory(ctx);
+      case "help":
+        return act.help(ctx);
+    }
+  };
+
+  // ---- slash commands ----
+
+  bot.command("help", (ctx) => act.help(ctx));
 
   bot.command("wallet", async (ctx) => {
     ensureUser(ctx);
@@ -152,102 +272,44 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
     await saveWallet(ctx, w.address, w.chain);
   });
 
-  bot.command("budget", async (ctx) => {
+  bot.command("budget", (ctx) => {
     ensureUser(ctx);
-    const amount = Number((ctx.match ?? "").replace(/[$,\s]/g, ""));
-    if (!Number.isFinite(amount) || amount <= 0 || !(ctx.match ?? "").trim()) {
-      awaitingBudget.add(ctx.from!.id);
-      return reply(ctx, "how much are you happy to risk a week, in usd? just the number, like <code>30</code>.");
-    }
-    tide.setBudget(ctx.from!.id, amount);
-    await reply(ctx, `done, your weekly budget is <b>${usd(amount)}</b>.`);
+    const raw = (ctx.match ?? "").replace(/[$,\s]/g, "");
+    return act.budget(ctx, raw ? Number(raw) : null);
   });
 
-  bot.command("share", async (ctx) => {
+  bot.command("share", (ctx) => {
     ensureUser(ctx);
-    const p = Number((ctx.match ?? "").replace(/[%\s]/g, ""));
-    if (!Number.isFinite(p) || p < 5 || p > 50) return reply(ctx, "pick something between 5 and 50, like /share <code>25</code>.");
-    tide.setBaseShare(ctx.from!.id, p / 100);
-    await reply(ctx, `okay, each alert now starts from <b>${p}%</b> of what's left in your week.`);
+    return act.share(ctx, Number((ctx.match ?? "").replace(/[%\s]/g, "")));
   });
 
-  bot.command("holdings", async (ctx) => {
-    ensureUser(ctx);
-    await reply(ctx, await tide.holdingsReport(ctx.from!.id));
-  });
+  bot.command("holdings", (ctx) => (ensureUser(ctx), act.holdings(ctx)));
+  bot.command("check", (ctx) => (ensureUser(ctx), act.check(ctx)));
+  bot.command("scan", (ctx) => (ensureUser(ctx), act.scan(ctx)));
+  bot.command("memory", (ctx) => (ensureUser(ctx), act.memory(ctx)));
 
-  bot.command("check", async (ctx) => {
-    const user = ensureUser(ctx);
-    if (!user.wallet && !user.solWallet) return reply(ctx, "i need a wallet first, paste your sui or solana address here.");
-    const found = await tide.checkWallet(user).catch((err) => {
-      log.error("check failed", err);
-      return -1;
-    });
-    if (found < 0) return reply(ctx, "couldn't read your wallet just now. give it a minute and try again.");
-    if (found === 0) await reply(ctx, "nothing new since i last looked.");
-  });
-
-  bot.command("scan", async (ctx) => {
-    ensureUser(ctx);
-    await ctx.replyWithChatAction("typing").catch(() => {});
-    background(ctx, "scan", async () => {
-      const n = await tide.scan().catch((err) => {
-        log.error("scan failed", err);
-        return -1;
-      });
-      if (n < 0) await reply(ctx, "the market data is being slow right now. try me again in a bit.");
-      else if (n === 0) await reply(ctx, `nothing's really moving on ${tide.chains.map((c) => CHAIN_LABEL[c]).join(" or ")} right now. i'll keep an eye out.`);
-    });
-  });
-
-  bot.command("top", async (ctx) => {
+  bot.command("top", (ctx) => {
     ensureUser(ctx);
     const arg = (ctx.match ?? "").trim().toLowerCase();
-    const chains = arg === "sui" || arg === "solana" ? [arg as Chain] : tide.chains;
-    await ctx.replyWithChatAction("typing").catch(() => {});
-    background(ctx, "top", async () => {
-      const lists = await tide.topTokens(chains);
-      const body = lists.map((l) => (l.error ? `couldn't load ${CHAIN_LABEL[l.chain]} right now.` : topList(l.chain, l.pools))).join("\n\n");
-      await reply(ctx, `${body}\n\nbig volume isn't the same as safe. ask me about any of these and i'll give you the red flags. nfa.`);
-    });
+    return act.top(ctx, arg === "sui" || arg === "solana" ? [arg] : undefined);
   });
 
-  bot.command("alerts", async (ctx) => {
+  bot.command("alerts", (ctx) => {
     ensureUser(ctx);
     const arg = (ctx.match ?? "").trim().toLowerCase();
-    if (arg === "off") (tide.setAlerts(ctx.from!.id, false), await reply(ctx, "okay, i'll stay quiet. /alerts on when you want me back."));
-    else if (arg === "on") (tide.setAlerts(ctx.from!.id, true), await reply(ctx, "alerts are back on."));
-    else if (arg === "reset") (tide.unmuteAll(ctx.from!.id), await reply(ctx, "unmuted everything, you'll hear about all token types again."));
-    else if (arg === "sui" || arg === "solana") {
-      tide.setAlertChains(ctx.from!.id, [arg]);
-      await reply(ctx, `okay, only ${arg} alerts from now on. /alerts both to hear about everything.`);
-    } else if (arg === "both") {
-      tide.setAlertChains(ctx.from!.id, ["sui", "solana"]);
-      await reply(ctx, "you'll hear about sui and solana.");
-    } else await reply(ctx, "use /alerts on, off, reset, or sui, solana, both.");
+    if (arg === "off" || arg === "on") return act.alerts(ctx, arg === "on");
+    if (arg === "reset") return act.unmute(ctx);
+    if (arg === "sui" || arg === "solana") return act.alertChains(ctx, [arg]);
+    if (arg === "both") return act.alertChains(ctx, ["sui", "solana"]);
+    return reply(ctx, "use /alerts on, off, reset, or sui, solana, both.");
   });
 
-  bot.command("launches", async (ctx) => {
+  bot.command("launches", (ctx) => {
     ensureUser(ctx);
     const arg = (ctx.match ?? "").trim().toLowerCase();
-    if (arg === "on") {
-      tide.setLaunches(ctx.from!.id, true);
-      return reply(
-        ctx,
-        "okay, i'll ping you when a new token launches on sui or solana and already has real liquidity and buyers. at most a few a day. these are the riskiest thing i send, most go to zero, so treat every one as money you can lose. /launches off to stop.",
-      );
-    }
-    if (arg === "off") {
-      tide.setLaunches(ctx.from!.id, false);
-      return reply(ctx, "no more launch alerts. you'll still get the usual ones when something starts moving.");
-    }
+    if (arg === "on" || arg === "off") return act.launches(ctx, arg === "on");
     const on = tide.store.getPref(ctx.from!.id, "launches") === "true";
-    await reply(ctx, `launch alerts are ${on ? "on" : "off"}. use /launches on or /launches off.`);
-  });
-
-  bot.command("memory", async (ctx) => {
-    ensureUser(ctx);
-    await reply(ctx, tide.memoryReport(ctx.from!.id));
+    return reply(ctx, `launch alerts are ${on ? "on" : "off"}. say "turn on launch alerts" or "turn them off".`);
   });
 
   bot.command("doctor", async (ctx) => {
@@ -321,7 +383,8 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
     if (text.startsWith("/")) return;
 
     if (awaitingBudget.has(user.id)) {
-      const amount = Number(text.replace(/[$,\s]/g, ""));
+      const said = parseIntent(text);
+      const amount = said?.action === "budget" ? said.amount : Number(text.replace(/[$,\s]|usd|dollars?/gi, ""));
       if (Number.isFinite(amount) && amount > 0) {
         awaitingBudget.delete(user.id);
         tide.setBudget(user.id, amount);
@@ -336,6 +399,10 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
     if (wallet && !(wallet.chain === "solana" && (await tide.isSolanaMint(wallet.address)))) {
       return saveWallet(ctx, wallet.address, wallet.chain);
     }
+
+    // Plain-language requests ("turn on launch alerts", "set my budget to 50") run for real.
+    const intent = wallet ? null : parseIntent(text);
+    if (intent) return runIntent(ctx, intent);
 
     // An unanswered "why did you buy" takes this message, unless it's clearly a question.
     if (!wallet && !QUESTION.test(text)) {

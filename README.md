@@ -91,6 +91,9 @@ No Walrus keys yet? Set `MEMWAL_DRY_RUN=true` to run without writes.
 
 ## Commands
 
+You don't need them. Plain words work for every setting and action, in English or pidgin: "turn on launch alerts", "only solana alerts", "pause alerts", "set my budget to $50", "use 20% per alert", "show my bags", "check my wallet", "what's pumping", "what do you remember about me". These are carried out directly, not guessed by the AI. The slash commands below do the same things.
+
+
 | Command | What it does |
 | --- | --- |
 | `/start` | Onboarding, or your status |
