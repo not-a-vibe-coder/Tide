@@ -4,6 +4,21 @@ import type { Pool } from "../core/types.js";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+export interface TopOptions {
+  minLiquidityUsd?: number;
+  /** Only tokens whose pool launched within this many hours. */
+  maxAgeHours?: number;
+}
+
+/** Below this, volume and price moves on a pool are mostly noise or wash trading. */
+export const TOP_MIN_LIQUIDITY: Record<Chain, number> = { sui: 10_000, solana: 50_000 };
+
+/** Stablecoins by ticker, so new ones (USDG, USD1, PYUSD...) never show up as "top tokens". */
+export function isStableSymbol(symbol: string): boolean {
+  const s = symbol.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return /^(USD|EUR)[A-Z0-9]{0,4}$|^[A-Z]{0,3}USD$|^(DAI|USDE|FRAX|LUSD|GHO|EURC|EUROC|XSGD|BUIDL)$/.test(s);
+}
+
 interface RawPool {
   id: string;
   attributes: {
@@ -140,22 +155,42 @@ export class Market {
   }
 
   /**
-   * Leading tokens on a chain: pools sorted by 24h volume, one per token,
-   * skipping the chain's own coin and stablecoins (SUI, SOL, USDC...).
+   * Leading tokens on a chain by 24h volume, one row per token. Pools under a
+   * liquidity floor are skipped (they're where the fake +1,000,000% moves
+   * live), as are the chain's own coin and stablecoins. With maxAgeHours,
+   * only tokens whose pool launched within that window are kept.
    */
-  async topTokens(chain: Chain, n = 5, skip: (token: string) => boolean = () => false): Promise<Pool[]> {
-    const key = `top:${chain}`;
+  async topTokens(chain: Chain, n = 5, skip: (token: string) => boolean = () => false, opts: TopOptions = {}): Promise<Pool[]> {
+    const minLiq = opts.minLiquidityUsd ?? TOP_MIN_LIQUIDITY[chain];
+    const fresh = opts.maxAgeHours !== undefined;
+    const key = `top:${chain}:${fresh ? "fresh" : "all"}`;
     const hit = this.poolsCache.get(key);
     let pools = hit && Date.now() - hit.at < 120_000 ? hit.value : null;
     if (!pools) {
-      const res = await this.get<{ data: RawPool[] }>(`/networks/${GECKO_NETWORK[chain]}/pools?page=1&sort=h24_volume_usd_desc`);
-      pools = res.data.map(normalisePool);
+      const net = GECKO_NETWORK[chain];
+      // Fresh tokens need more sources: the volume list is dominated by old pools.
+      const paths = fresh
+        ? [
+            `/networks/${net}/trending_pools?page=1&duration=24h`,
+            `/networks/${net}/trending_pools?page=2&duration=24h`,
+            `/networks/${net}/new_pools?page=1`,
+            `/networks/${net}/new_pools?page=2`,
+            `/networks/${net}/pools?page=1&sort=h24_volume_usd_desc`,
+          ]
+        : [`/networks/${net}/pools?page=1&sort=h24_volume_usd_desc`, `/networks/${net}/trending_pools?page=1&duration=24h`];
+      const results = await Promise.allSettled(paths.map((p) => this.get<{ data: RawPool[] }>(p)));
+      if (results.every((r) => r.status === "rejected")) throw (results[0] as PromiseRejectedResult).reason;
+      pools = results.flatMap((r) => (r.status === "fulfilled" ? r.value.data.map(normalisePool) : []));
       this.poolsCache.set(key, { at: Date.now(), value: pools });
     }
+    const now = Date.now();
+    const maxAgeMs = (opts.maxAgeHours ?? Infinity) * 3_600_000;
     const seen = new Set<string>();
     const out: Pool[] = [];
     for (const p of pools.slice().sort((a, b) => b.volumeUsd.h24 - a.volumeUsd.h24)) {
-      if (!p.baseCoinType || skip(p.baseCoinType) || seen.has(p.baseCoinType)) continue;
+      if (!p.baseCoinType || seen.has(p.baseCoinType) || skip(p.baseCoinType) || isStableSymbol(p.baseSymbol)) continue;
+      if (p.liquidityUsd < minLiq) continue;
+      if (fresh && (!p.createdAt || now - p.createdAt.getTime() > maxAgeMs)) continue;
       seen.add(p.baseCoinType);
       out.push(p);
       if (out.length >= n) break;

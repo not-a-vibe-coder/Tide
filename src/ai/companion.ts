@@ -14,6 +14,8 @@ import { systemPrompt } from "./persona.js";
 
 const HISTORY_TURNS = 12;
 /** "top 5 tokens on solana", "what's trending on sui", "biggest movers" */
+/** "released in the past 24 hours", "launched today", "new tokens" */
+const FRESH_WINDOW = /\b(24\s*h(ou)?rs?|past day|last day|today|new(ly)?\s+(launched|listed|tokens?|coins?)|launched|released|fresh)\b/i;
 const MARKET_QUESTION = /\b(top \d+|top tokens?|top coins?|leading|trending|hottest|biggest movers|movers|gainers|most traded|highest volume)\b/i;
 
 export interface Sizer {
@@ -26,6 +28,8 @@ export interface Sizer {
  */
 export class Companion {
   private readonly history = new Map<number, ChatMessage[]>();
+  /** The last top list each person saw, so follow-ups can refer to it. */
+  private readonly lastOverview = new Map<number, { at: number; lines: string[]; known: { symbol: string; token: string }[] }>();
 
   constructor(
     private readonly llm: Llm,
@@ -73,35 +77,55 @@ export class Companion {
   }
 
   /** When they ask what's leading or hot, give the model the live top lists. */
-  async marketOverview(text: string): Promise<string[]> {
-    if (!this.market.topTokens || !MARKET_QUESTION.test(text)) return [];
+  async marketOverview(userId: number, text: string): Promise<string[]> {
+    if (!this.market.topTokens) return [];
+    if (!MARKET_QUESTION.test(text)) {
+      // A follow-up ("give me their mc", "tell me more about the 3rd one") gets the list they just saw.
+      const last = this.lastOverview.get(userId);
+      return last && Date.now() - last.at < 15 * 60_000 ? ["The list you showed them a moment ago (still valid):", ...last.lines] : [];
+    }
     const wants = (["sui", "solana"] as const).filter((c) => new RegExp(`\\b${c === "solana" ? "(solana|sol)" : "sui"}\\b`, "i").test(text));
     const chains = wants.length ? [...wants] : (["sui", "solana"] as const);
-    const out: string[] = ["Top tokens right now by 24h volume (live from geckoterminal, native coins and stablecoins left out):"];
+    const fresh = FRESH_WINDOW.test(text);
+    const header = fresh
+      ? "Top tokens launched in the last 24 hours, by 24h volume (live from geckoterminal; tiny pools, native coins and stablecoins left out):"
+      : "Top tokens right now by 24h volume (live from geckoterminal; tiny pools, native coins and stablecoins left out):";
+    const lines: string[] = [];
+    const known: { symbol: string; token: string }[] = [];
+    const now = Date.now();
     for (const chain of chains) {
       try {
-        const pools = await this.market.topTokens(chain, 5, isCash);
+        const pools = await this.market.topTokens(chain, 5, isCash, fresh ? { maxAgeHours: 24 } : {});
         if (!pools.length) {
-          out.push(`- ${chain}: nothing came back`);
+          lines.push(`- ${chain}: nothing ${fresh ? "launched in the last 24h" : ""} passed the liquidity floor right now, say so plainly`);
           continue;
         }
-        out.push(`${chain}:`);
-        pools.forEach((p, i) =>
-          out.push(
-            `  ${i + 1}. ${p.baseSymbol}: price ${usd(p.priceUsd)}, ${pct(p.priceChangePct.h24)} 24h, ${usd(p.volumeUsd.h24)} traded in 24h, mcap ${usd(p.marketCapUsd ?? p.fdvUsd)}, liquidity ${usd(p.liquidityUsd)}, ${assessRisk(p).label} risk`,
-          ),
-        );
+        lines.push(`${chain}:`);
+        pools.forEach((p, i) => {
+          known.push({ symbol: p.baseSymbol, token: p.baseCoinType });
+          const age = p.createdAt ? ageText(now - p.createdAt.getTime()) : "unknown age";
+          const cap = p.marketCapUsd !== null ? `market cap ${usd(p.marketCapUsd)}` : p.fdvUsd !== null ? `fdv ${usd(p.fdvUsd)} (no circulating market cap reported)` : "no market cap reported";
+          lines.push(
+            `  ${i + 1}. ${p.baseSymbol}: price ${usd(p.priceUsd)}, ${pct(p.priceChangePct.h24)} 24h, ${usd(p.volumeUsd.h24)} traded in 24h, ${cap}, liquidity ${usd(p.liquidityUsd)}, pool ${age} old, ${assessRisk(p).label} risk, token ${p.baseCoinType}`,
+          );
+        });
       } catch {
-        out.push(`- ${chain}: market data busy, say you couldn't load it right now`);
+        lines.push(`- ${chain}: market data busy, say you couldn't load it right now`);
       }
     }
-    out.push("When listing these, keep it short, one line per token, and remind them volume isn't safety.");
-    return out;
+    this.lastOverview.set(userId, { at: Date.now(), lines: [header, ...lines], known });
+    return [
+      header,
+      ...lines,
+      "List them one line per token with price, 24h change, market cap (or fdv, say which) and age. Keep it short, and remind them volume isn't safety.",
+    ];
   }
 
   /** Looks up tokens the message names and returns the facts, or what couldn't be found. */
   async tokenLookups(userId: number, text: string): Promise<string[]> {
+    const recentList = this.lastOverview.get(userId);
     const known = [
+      ...(recentList && Date.now() - recentList.at < 15 * 60_000 ? recentList.known : []),
       ...this.store.openHoldings(userId).map((h) => ({ symbol: h.symbol, token: h.coinType })),
       ...this.store.recentAlerts(userId, 10).map((a) => ({ symbol: a.symbol, token: a.coinType })),
     ];
@@ -213,7 +237,7 @@ export class Companion {
       if (s.total >= 3) lines.push(`Across all Tide users, ${classLabel(cls)} were up 24h after ${s.wins} of ${s.total} alerts.`);
     }
 
-    lines.push(...(await this.marketOverview(text)));
+    lines.push(...(await this.marketOverview(userId, text)));
     lines.push(...(await this.tokenLookups(userId, text)));
 
     const recalled = await this.memory.recallFor(userId, text).catch(() => []);
@@ -227,4 +251,11 @@ export class Companion {
 
 function classLabel(c: TokenClass): string {
   return c === "new" ? "brand-new pools (under 7 days)" : "established tokens";
+}
+
+function ageText(ms: number): string {
+  const h = ms / 3_600_000;
+  if (h < 1) return `${Math.max(1, Math.round(ms / 60_000))} minutes`;
+  if (h < 48) return `${Math.round(h)} hours`;
+  return `${Math.round(h / 24)} days`;
 }

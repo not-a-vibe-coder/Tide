@@ -15,7 +15,7 @@ const HELP = [
   "",
   "/holdings · your bags, how they're doing, and why you bought",
   "/scan · look for anything moving right now",
-  "/top · the top 5 tokens on sui and solana by 24h volume (or /top sui, /top solana)",
+  "/top · the top 5 tokens on sui and solana by 24h volume (/top solana, /top new for launched in the last 24h)",
   "/check · look for new buys in your wallet",
   "/budget <code>30</code> · how much you're happy to risk a week, in usd",
   "/share <code>25</code> · what % of what's left i size each alert from",
@@ -191,11 +191,11 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
       });
     },
 
-    top: async (ctx: Context, chains?: Chain[]) => {
+    top: async (ctx: Context, chains?: Chain[], fresh = false) => {
       await ctx.replyWithChatAction("typing").catch(() => {});
       background(ctx, "top", async () => {
-        const lists = await tide.topTokens(chains?.length ? chains : tide.chains);
-        const body = lists.map((l) => (l.error ? `couldn't load ${CHAIN_LABEL[l.chain]} right now.` : topList(l.chain, l.pools))).join("\n\n");
+        const lists = await tide.topTokens(chains?.length ? chains : tide.chains, 5, fresh);
+        const body = lists.map((l) => (l.error ? `couldn't load ${CHAIN_LABEL[l.chain]} right now.` : topList(l.chain, l.pools, fresh))).join("\n\n");
         await reply(ctx, `${body}\n\nbig volume isn't the same as safe. ask me about any of these and i'll give you the red flags. nfa.`);
       });
     },
@@ -290,8 +290,10 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
 
   bot.command("top", (ctx) => {
     ensureUser(ctx);
-    const arg = (ctx.match ?? "").trim().toLowerCase();
-    return act.top(ctx, arg === "sui" || arg === "solana" ? [arg] : undefined);
+    const args = (ctx.match ?? "").trim().toLowerCase().split(/\s+/);
+    const chains = args.filter((a): a is Chain => a === "sui" || a === "solana");
+    const fresh = args.some((a) => a === "new" || a === "24h" || a === "fresh");
+    return act.top(ctx, chains.length ? chains : undefined, fresh);
   });
 
   bot.command("alerts", (ctx) => {

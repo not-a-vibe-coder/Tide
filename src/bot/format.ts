@@ -105,11 +105,20 @@ export function thesisCheck(h: Holding, volumeNow: number | null): string | null
 }
 
 /** One chain's top tokens, for /top. */
-export function topList(chain: Chain, pools: Pool[]): string {
-  if (!pools.length) return `couldn't load ${CHAIN_LABEL[chain]} right now.`;
-  const lines = pools.map(
-    (p, i) =>
-      `${i + 1}. <b>${esc(p.baseSymbol)}</b> ${usd(p.priceUsd)} (${pct(p.priceChangePct.h24)} 24h) · ${usd(p.volumeUsd.h24)} traded · mcap ${usd(p.marketCapUsd ?? p.fdvUsd)}`,
-  );
-  return [`<b>top on ${CHAIN_LABEL[chain]} by 24h volume</b>`, ...lines].join("\n");
+export function topList(chain: Chain, pools: Pool[], fresh = false, now = Date.now()): string {
+  const title = fresh ? `<b>launched on ${CHAIN_LABEL[chain]} in the last 24h, by volume</b>` : `<b>top on ${CHAIN_LABEL[chain]} by 24h volume</b>`;
+  if (!pools.length) return `${title}\nnothing with real liquidity right now.`;
+  const lines = pools.map((p, i) => {
+    const cap = p.marketCapUsd !== null ? `mcap ${usd(p.marketCapUsd)}` : p.fdvUsd !== null ? `fdv ${usd(p.fdvUsd)}` : "no mcap";
+    const age = p.createdAt ? ` · ${shortAge(now - p.createdAt.getTime())} old` : "";
+    return `${i + 1}. <b>${esc(p.baseSymbol)}</b> ${usd(p.priceUsd)} (${pct(p.priceChangePct.h24)} 24h) · ${usd(p.volumeUsd.h24)} traded · ${cap}${age}`;
+  });
+  return [title, ...lines].join("\n");
+}
+
+function shortAge(ms: number): string {
+  const h = ms / 3_600_000;
+  if (h < 1) return `${Math.max(1, Math.round(ms / 60_000))}m`;
+  if (h < 48) return `${Math.round(h)}h`;
+  return `${Math.round(h / 24)}d`;
 }

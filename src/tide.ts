@@ -315,11 +315,11 @@ export class Tide {
   }
 
   /** Leading tokens by 24h volume on each chain, without the native coin or stablecoins. */
-  async topTokens(chains: Chain[] = this.chains, n = 5): Promise<{ chain: Chain; pools: Pool[]; error?: string }[]> {
+  async topTokens(chains: Chain[] = this.chains, n = 5, fresh = false): Promise<{ chain: Chain; pools: Pool[]; error?: string }[]> {
     const out: { chain: Chain; pools: Pool[]; error?: string }[] = [];
     for (const chain of chains) {
       try {
-        out.push({ chain, pools: await this.market.topTokens(chain, n, isCash) });
+        out.push({ chain, pools: await this.market.topTokens(chain, n, isCash, fresh ? { maxAgeHours: 24 } : {}) });
       } catch (err) {
         out.push({ chain, pools: [], error: err instanceof Error ? err.message : String(err) });
       }
