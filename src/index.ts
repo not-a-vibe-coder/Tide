@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import cron from "node-cron";
 import { createBot } from "./bot/bot.js";
 import { SuiReader } from "./chain/sui.js";
@@ -74,6 +75,16 @@ async function main() {
   };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
+
+  // Hosts like Render's free web service need an open port and incoming traffic
+  // to stay awake. Only starts when PORT is set, so local runs are unaffected.
+  if (process.env.PORT) {
+    const startedAt = new Date().toISOString();
+    createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, service: "tide", startedAt, memory: store.memoryStats() }));
+    }).listen(Number(process.env.PORT), "0.0.0.0", () => log.info(`health endpoint on :${process.env.PORT}`));
+  }
 
   log.info("Tide is running");
   await bot.start({ drop_pending_updates: true });
