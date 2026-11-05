@@ -48,9 +48,15 @@ const SAMPLE_WALLET = "0x0000000000000000000000000000000000000000000000000000000
 /** A long-lived Solana account (the vote program) to read when the admin has no Solana wallet set. */
 const SAMPLE_SOLANA_WALLET = "Vote111111111111111111111111111111111111111";
 
+const CHECK_TIMEOUT_MS = 40_000;
+
 async function check(name: string, fn: () => Promise<string>): Promise<CheckResult> {
   try {
-    return { name, ok: true, detail: await fn() };
+    const detail = await Promise.race([
+      fn(),
+      new Promise<string>((_, rej) => setTimeout(() => rej(new Error(`no answer after ${CHECK_TIMEOUT_MS / 1000}s`)), CHECK_TIMEOUT_MS)),
+    ]);
+    return { name, ok: true, detail };
   } catch (err) {
     return { name, ok: false, detail: err instanceof Error ? err.message : String(err) };
   }

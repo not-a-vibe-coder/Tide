@@ -1,3 +1,4 @@
+import { sequentialize } from "@grammyjs/runner";
 import { Bot, InlineKeyboard, type Context } from "grammy";
 import { toTelegramHtml } from "../ai/clean.js";
 import type { Companion } from "../ai/companion.js";
@@ -58,6 +59,16 @@ export function createBot(token: string, tide: Tide, opts: BotOptions): Bot {
   const { adminIds, runDoctor, companion } = opts;
   const bot = new Bot(token);
   const awaitingBudget = new Set<number>();
+  // Updates run concurrently across chats; one chat's messages stay in order.
+  bot.use(sequentialize((ctx: Context) => ctx.chat?.id.toString()));
+
+  /** Run slow work without holding up this chat's next message. */
+  const background = (ctx: Context, name: string, work: () => Promise<unknown>) => {
+    void work().catch(async (err) => {
+      log.error(`${name} failed`, err);
+      await ctx.reply(`${name} broke: ${esc(err instanceof Error ? err.message : String(err))}`, { parse_mode: "HTML" }).catch(() => {});
+    });
+  };
 
   const notifier: Notifier = {
     async send(chatId, html, buttons) {
@@ -178,12 +189,14 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
   bot.command("scan", async (ctx) => {
     ensureUser(ctx);
     await ctx.replyWithChatAction("typing").catch(() => {});
-    const n = await tide.scan().catch((err) => {
-      log.error("scan failed", err);
-      return -1;
+    background(ctx, "scan", async () => {
+      const n = await tide.scan().catch((err) => {
+        log.error("scan failed", err);
+        return -1;
+      });
+      if (n < 0) await reply(ctx, "the market data is being slow right now. try me again in a bit.");
+      else if (n === 0) await reply(ctx, `nothing's really moving on ${tide.chains.map((c) => CHAIN_LABEL[c]).join(" or ")} right now. i'll keep an eye out.`);
     });
-    if (n < 0) await reply(ctx, "the market data is being slow right now. try me again in a bit.");
-    else if (n === 0) await reply(ctx, `nothing's really moving on ${tide.chains.map((c) => CHAIN_LABEL[c]).join(" or ")} right now. i'll keep an eye out.`);
   });
 
   bot.command("alerts", async (ctx) => {
@@ -229,18 +242,22 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
       return reply(ctx, `only the admin can run checks. your telegram id is <code>${ctx.from!.id}</code>.`);
     }
     if (!runDoctor) return reply(ctx, "checks aren't available in this build.");
-    await reply(ctx, "checking telegram, tatum, geckoterminal and a real walrus memory write…");
+    await reply(ctx, "checking telegram, tatum, solana, geckoterminal, walrus and the ai. takes up to a minute, keep chatting meanwhile.");
     const user = tide.store.getUser(ctx.from!.id);
-    const results = await runDoctor({ sui: user?.wallet, solana: user?.solWallet });
-    const lines = results.map((r) => `${r.ok ? "✅" : "❌"} <b>${esc(r.name)}</b>: ${esc(r.detail)}`);
-    if (companion) {
-      const ai = await companion.ping().then(
-        (d) => `✅ <b>AI chat</b>: ${esc(d)}`,
-        (e) => `${companion.enabled ? "❌" : "⚪"} <b>AI chat</b>: ${esc(e instanceof Error ? e.message : String(e))}`,
-      );
-      lines.push(ai);
-    }
-    await reply(ctx, lines.join("\n"));
+    background(ctx, "doctor", async () => {
+      const [results, ai] = await Promise.all([
+        runDoctor({ sui: user?.wallet, solana: user?.solWallet }),
+        companion
+          ? withTimeout(companion.ping(), 30_000, "ai check").then(
+              (d) => `✅ <b>AI chat</b>: ${esc(d)}`,
+              (e) => `${companion.enabled ? "❌" : "⚪"} <b>AI chat</b>: ${esc(e instanceof Error ? e.message : String(e))}`,
+            )
+          : Promise.resolve(null),
+      ]);
+      const lines = results.map((r) => `${r.ok ? "✅" : "❌"} <b>${esc(r.name)}</b>: ${esc(r.detail)}`);
+      if (ai) lines.push(ai);
+      await reply(ctx, lines.join("\n"));
+    });
   });
 
   bot.command("rebuild", async (ctx) => {
@@ -342,4 +359,8 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
 
   bot.catch((err) => log.error("bot error", err.error));
   return bot;
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  return Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms / 1000}s`)), ms))]);
 }

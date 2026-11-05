@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { run, type RunnerHandle } from "@grammyjs/runner";
 import cron from "node-cron";
 import { Companion } from "./ai/companion.js";
 import { Llm } from "./ai/llm.js";
@@ -98,9 +99,10 @@ async function main() {
   cron.schedule("7 * * * *", guard("outcomes", () => tide.resolveOutcomes()), tz);
   cron.schedule(`0 ${cfg.DIGEST_HOUR_LAGOS} * * *`, guard("digest", () => tide.sendDigests()), tz);
 
+  let runner: RunnerHandle | undefined;
   const stop = async () => {
     log.info("shutting down, finishing Walrus writes…");
-    await bot.stop();
+    if (runner?.isRunning()) await runner.stop();
     await memory.flush();
     process.exit(0);
   };
@@ -118,7 +120,12 @@ async function main() {
   }
 
   log.info("Tide is running");
-  await bot.start({ drop_pending_updates: true });
+  // Concurrent runner: a slow reply for one person never holds up anyone else.
+  // Messages sent while Render restarts are kept and answered on startup.
+  await bot.init();
+  runner = run(bot);
+  log.info(`polling as @${bot.botInfo.username}`);
+  await runner.task();
 }
 
 // A dropped socket inside a network library shouldn't take the bot down.
