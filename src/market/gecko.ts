@@ -139,6 +139,30 @@ export class Market {
     return [...byAddress.values()];
   }
 
+  /**
+   * Leading tokens on a chain: pools sorted by 24h volume, one per token,
+   * skipping the chain's own coin and stablecoins (SUI, SOL, USDC...).
+   */
+  async topTokens(chain: Chain, n = 5, skip: (token: string) => boolean = () => false): Promise<Pool[]> {
+    const key = `top:${chain}`;
+    const hit = this.poolsCache.get(key);
+    let pools = hit && Date.now() - hit.at < 120_000 ? hit.value : null;
+    if (!pools) {
+      const res = await this.get<{ data: RawPool[] }>(`/networks/${GECKO_NETWORK[chain]}/pools?page=1&sort=h24_volume_usd_desc`);
+      pools = res.data.map(normalisePool);
+      this.poolsCache.set(key, { at: Date.now(), value: pools });
+    }
+    const seen = new Set<string>();
+    const out: Pool[] = [];
+    for (const p of pools.slice().sort((a, b) => b.volumeUsd.h24 - a.volumeUsd.h24)) {
+      if (!p.baseCoinType || skip(p.baseCoinType) || seen.has(p.baseCoinType)) continue;
+      seen.add(p.baseCoinType);
+      out.push(p);
+      if (out.length >= n) break;
+    }
+    return out;
+  }
+
   /** Every pool a token trades in, most liquid first. Cached for a minute. */
   async tokenPools(token: string): Promise<Pool[]> {
     const key = normaliseToken(token);

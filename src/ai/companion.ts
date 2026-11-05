@@ -1,3 +1,4 @@
+import { isCash } from "../core/buys.js";
 import { CHAIN_LABEL, chainOf } from "../core/chains.js";
 import { assessRisk, classifyToken } from "../core/spike.js";
 import { startOfWeekLagos, trackRecordMultiplier } from "../core/sizing.js";
@@ -12,6 +13,8 @@ import type { ChatMessage, Llm } from "./llm.js";
 import { systemPrompt } from "./persona.js";
 
 const HISTORY_TURNS = 12;
+/** "top 5 tokens on solana", "what's trending on sui", "biggest movers" */
+const MARKET_QUESTION = /\b(top \d+|top tokens?|top coins?|leading|trending|hottest|biggest movers|movers|gainers|most traded|highest volume)\b/i;
 
 export interface Sizer {
   sizingFor(user: NonNullable<ReturnType<Store["getUser"]>>, tokenClass: TokenClass, riskMultiplier: number): { maxUsd: number } | null;
@@ -67,6 +70,33 @@ export class Companion {
     const h = this.history.get(userId) ?? [];
     h.push({ role: "user", content: text }, { role: "assistant", content: reply });
     this.history.set(userId, h.slice(-HISTORY_TURNS));
+  }
+
+  /** When they ask what's leading or hot, give the model the live top lists. */
+  async marketOverview(text: string): Promise<string[]> {
+    if (!this.market.topTokens || !MARKET_QUESTION.test(text)) return [];
+    const wants = (["sui", "solana"] as const).filter((c) => new RegExp(`\\b${c === "solana" ? "(solana|sol)" : "sui"}\\b`, "i").test(text));
+    const chains = wants.length ? [...wants] : (["sui", "solana"] as const);
+    const out: string[] = ["Top tokens right now by 24h volume (live from geckoterminal, native coins and stablecoins left out):"];
+    for (const chain of chains) {
+      try {
+        const pools = await this.market.topTokens(chain, 5, isCash);
+        if (!pools.length) {
+          out.push(`- ${chain}: nothing came back`);
+          continue;
+        }
+        out.push(`${chain}:`);
+        pools.forEach((p, i) =>
+          out.push(
+            `  ${i + 1}. ${p.baseSymbol}: price ${usd(p.priceUsd)}, ${pct(p.priceChangePct.h24)} 24h, ${usd(p.volumeUsd.h24)} traded in 24h, mcap ${usd(p.marketCapUsd ?? p.fdvUsd)}, liquidity ${usd(p.liquidityUsd)}, ${assessRisk(p).label} risk`,
+          ),
+        );
+      } catch {
+        out.push(`- ${chain}: market data busy, say you couldn't load it right now`);
+      }
+    }
+    out.push("When listing these, keep it short, one line per token, and remind them volume isn't safety.");
+    return out;
   }
 
   /** Looks up tokens the message names and returns the facts, or what couldn't be found. */
@@ -183,6 +213,7 @@ export class Companion {
       if (s.total >= 3) lines.push(`Across all Tide users, ${classLabel(cls)} were up 24h after ${s.wins} of ${s.total} alerts.`);
     }
 
+    lines.push(...(await this.marketOverview(text)));
     lines.push(...(await this.tokenLookups(userId, text)));
 
     const recalled = await this.memory.recallFor(userId, text).catch(() => []);

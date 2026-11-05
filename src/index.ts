@@ -64,6 +64,7 @@ async function main() {
     { command: "start", description: "start, or see what i'm watching" },
     { command: "holdings", description: "your bags and how they're doing" },
     { command: "scan", description: "anything moving on sui or solana" },
+    { command: "top", description: "top 5 on sui and solana by volume" },
     { command: "check", description: "look for new buys in your wallets" },
     { command: "budget", description: "how much you'll risk a week" },
     { command: "alerts", description: "pause me, or pick sui, solana or both" },

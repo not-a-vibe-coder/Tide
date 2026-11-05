@@ -16,7 +16,8 @@ Built for the [Walrus × Tatum Total Recall](https://recall-tatum-walrus.vercel.
 6. **Fresh launches (opt-in):** `/launches on` pings you when a token launches on Sui or Solana and, within its first hour, already has real liquidity and buyers (Sui: $5k and 10 buys, Solana: $20k and 30 buys). At most one per chain per scan and six a day. Tide sees launches once they hit a DEX, so it's not a sniper.
 7. **Feedback:** tap **Bought**, **Skipped** or **Not for me**. 24 hours later Tide records how the token did. That outcome feeds your track record.
 8. **Ask about any token:** "why shouldn't i buy $WIF?", "thoughts on scoop", or paste a Sui coin type or Solana mint. Tide looks it up live (price, market cap, liquidity, volume, pool age, buy/sell pressure, its own risk check), gives you the red flags first, then what's genuinely good, then your max size by your own rules. It never predicts prices or tells you to buy or sell.
-9. **Just talk to it:** ask anything in plain words ("how's scoop doing?", "should i go bigger on this one?", or in pidgin). Tide answers like a friend texting, using your real budget, positions, buy reasons and track record, plus memories recalled from Walrus.
+9. **What's leading:** `/top`, or ask "top 5 on solana right now". Tide lists the top tokens on each chain by 24h volume (leaving out SUI, SOL and stablecoins) with price, 24h change, volume and market cap.
+10. **Just talk to it:** ask anything in plain words ("how's scoop doing?", "should i go bigger on this one?", or in pidgin). Tide answers like a friend texting, using your real budget, positions, buy reasons and track record, plus memories recalled from Walrus.
 
 ### Voice
 
@@ -98,7 +99,8 @@ No Walrus keys yet? Set `MEMWAL_DRY_RUN=true` to run without writes.
 | `/share 25` | % of remaining budget per alert |
 | `/holdings` | Positions, P&L and your reasons |
 | `/check` | Check your wallet for new buys now |
-| `/scan` | Scan Sui for spikes now |
+| `/scan` | Scan Sui and Solana for spikes now |
+| `/top [sui\|solana]` | Top 5 tokens by 24h volume on each chain |
 | `/alerts on\|off\|reset` | Pause alerts or unmute token classes |
 | `/alerts sui\|solana\|both` | Choose which chains you get alerts for |
 | `/launches on\|off` | Alerts for brand-new token launches (off by default) |

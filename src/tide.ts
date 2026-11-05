@@ -3,7 +3,7 @@ import { STABLECOINS, SUI_COIN_TYPE, diffBalances, isCash, normaliseCoinType, to
 import { SOL_MINT, chainOf, type Chain } from "./core/chains.js";
 import { proposeBudget, startOfWeekLagos, suggestSize, trackRecordMultiplier } from "./core/sizing.js";
 import { DEFAULT_LAUNCH_RULES, DEFAULT_SPIKE_RULES, assessRisk, detectLaunch, detectSpike, type LaunchRules, type SpikeRules } from "./core/spike.js";
-import type { SizingResult, Spike, TokenClass } from "./core/types.js";
+import type { Pool, SizingResult, Spike, TokenClass } from "./core/types.js";
 import { NO_REASON, alertMessage, esc, holdingLine, pct, usd, type HoldingView } from "./bot/format.js";
 import type { CoinInfo } from "./chain/sui.js";
 import { log } from "./log.js";
@@ -312,6 +312,19 @@ export class Tide {
       }
     }
     return sent;
+  }
+
+  /** Leading tokens by 24h volume on each chain, without the native coin or stablecoins. */
+  async topTokens(chains: Chain[] = this.chains, n = 5): Promise<{ chain: Chain; pools: Pool[]; error?: string }[]> {
+    const out: { chain: Chain; pools: Pool[]; error?: string }[] = [];
+    for (const chain of chains) {
+      try {
+        out.push({ chain, pools: await this.market.topTokens(chain, n, isCash) });
+      } catch (err) {
+        out.push({ chain, pools: [], error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return out;
   }
 
   sizingFor(user: User, tokenClass: TokenClass, riskMultiplier: number): SizingResult | null {

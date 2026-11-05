@@ -7,13 +7,14 @@ import { CHAIN_LABEL, parseSolanaAddress, type Chain } from "../core/chains.js";
 import type { CheckResult } from "../checks.js";
 import { log } from "../log.js";
 import type { AlertAction, Button, Notifier, Tide } from "../tide.js";
-import { esc, shortAddress, usd } from "./format.js";
+import { esc, shortAddress, topList, usd } from "./format.js";
 
 const HELP = [
   "i'm <b>tide</b>. i watch sui and solana for tokens that start moving, keep track of what you buy and why, and get stricter with you when your calls go bad. you can just talk to me too, or ask me about any token.",
   "",
   "/holdings · your bags, how they're doing, and why you bought",
   "/scan · look for anything moving right now",
+  "/top · the top 5 tokens on sui and solana by 24h volume (or /top sui, /top solana)",
   "/check · look for new buys in your wallet",
   "/budget <code>30</code> · how much you're happy to risk a week, in usd",
   "/share <code>25</code> · what % of what's left i size each alert from",
@@ -196,6 +197,18 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
       });
       if (n < 0) await reply(ctx, "the market data is being slow right now. try me again in a bit.");
       else if (n === 0) await reply(ctx, `nothing's really moving on ${tide.chains.map((c) => CHAIN_LABEL[c]).join(" or ")} right now. i'll keep an eye out.`);
+    });
+  });
+
+  bot.command("top", async (ctx) => {
+    ensureUser(ctx);
+    const arg = (ctx.match ?? "").trim().toLowerCase();
+    const chains = arg === "sui" || arg === "solana" ? [arg as Chain] : tide.chains;
+    await ctx.replyWithChatAction("typing").catch(() => {});
+    background(ctx, "top", async () => {
+      const lists = await tide.topTokens(chains);
+      const body = lists.map((l) => (l.error ? `couldn't load ${CHAIN_LABEL[l.chain]} right now.` : topList(l.chain, l.pools))).join("\n\n");
+      await reply(ctx, `${body}\n\nbig volume isn't the same as safe. ask me about any of these and i'll give you the red flags. nfa.`);
     });
   });
 

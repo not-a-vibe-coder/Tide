@@ -1,4 +1,4 @@
-import { CHAIN_LABEL, GECKO_NETWORK } from "../core/chains.js";
+import { CHAIN_LABEL, GECKO_NETWORK, type Chain } from "../core/chains.js";
 import type { Pool, RiskCheck, SizingResult, Spike } from "../core/types.js";
 import type { Holding } from "../memory/store.js";
 
@@ -102,4 +102,14 @@ export function thesisCheck(h: Holding, volumeNow: number | null): string | null
   if (change <= -30) return `heads up, volume is ${pct(change)} since then, so that reason might not hold anymore.`;
   if (change >= 30) return `volume is ${pct(change)} since then, so that reason still holds.`;
   return `volume is about the same as when you bought (${pct(change)}).`;
+}
+
+/** One chain's top tokens, for /top. */
+export function topList(chain: Chain, pools: Pool[]): string {
+  if (!pools.length) return `couldn't load ${CHAIN_LABEL[chain]} right now.`;
+  const lines = pools.map(
+    (p, i) =>
+      `${i + 1}. <b>${esc(p.baseSymbol)}</b> ${usd(p.priceUsd)} (${pct(p.priceChangePct.h24)} 24h) · ${usd(p.volumeUsd.h24)} traded · mcap ${usd(p.marketCapUsd ?? p.fdvUsd)}`,
+  );
+  return [`<b>top on ${CHAIN_LABEL[chain]} by 24h volume</b>`, ...lines].join("\n");
 }
