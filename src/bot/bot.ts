@@ -27,7 +27,7 @@ const HELP = [
   "",
   "no commands needed, you can just say things like \"turn on launch alerts\", \"only solana alerts\", \"set my budget to 50\", \"show my bags\" or \"why shouldn't i buy $WIF\".",
   "",
-  "what you tell me lives on walrus memory. nothing i say is financial advice.",
+  "i remember what you tell me, so you never have to repeat yourself. nothing i say is financial advice.",
 ].join("\n");
 
 /** A pasted Sui or Solana wallet address. */
@@ -319,7 +319,7 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
       return reply(ctx, `only the admin can run checks. your telegram id is <code>${ctx.from!.id}</code>.`);
     }
     if (!runDoctor) return reply(ctx, "checks aren't available in this build.");
-    await reply(ctx, "checking telegram, tatum, solana, geckoterminal, walrus and the ai. takes up to a minute, keep chatting meanwhile.");
+    await reply(ctx, "running checks, takes up to a minute. keep chatting meanwhile.");
     const user = tide.store.getUser(ctx.from!.id);
     background(ctx, "doctor", async () => {
       const [results, ai] = await Promise.all([
@@ -333,32 +333,39 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
       ]);
       const lines = results.map((r) => `${r.ok ? "✅" : "❌"} <b>${esc(r.name)}</b>: ${esc(r.detail)}`);
       if (ai) lines.push(ai);
+      lines.push(`📦 <b>Storage</b>: ${esc(tide.storageReport())}`);
       await reply(ctx, lines.join("\n"));
     });
   });
 
   bot.command("backfill", async (ctx) => {
     if (!adminIds.includes(ctx.from!.id)) return reply(ctx, "only the admin can run a backfill.");
-    await reply(ctx, "replaying the last week of real price history on sui and solana. this takes a few minutes, i'll report back.");
+    await reply(ctx, "going back over the last week of sui and solana prices to see how signals like mine played out. takes a few minutes, i'll report back.");
     background(ctx, "backfill", async () => {
       const summary = await tide.backfill();
-      const lines = summary.map(
-        (s) => `${CHAIN_LABEL[s.chain]}: ${s.pools} pools, ${s.outcomes} signals, ${s.outcomes ? Math.round((s.up / s.outcomes) * 100) : 0}% were up 24h later`,
+      const lines = summary.map((s) =>
+        s.outcomes
+          ? `${CHAIN_LABEL[s.chain]}: ${s.outcomes} signals across ${s.pools} tokens, ${Math.round((s.up / s.outcomes) * 100)}% were up a day later`
+          : `${CHAIN_LABEL[s.chain]}: nothing to learn from right now`,
       );
-      const src = tide.store.outcomeSources();
-      await reply(ctx, ["<b>backfill done</b>", ...lines, "", `shared memory now holds ${src.history} history outcomes and ${src.live} live ones, saving to walrus.`].join("\n"));
+      await reply(ctx, ["<b>done, here's how last week's signals played out</b>", ...lines, "", "new people now start from this instead of from zero."].join("\n"));
     });
   });
 
   bot.command("rebuild", async (ctx) => {
     if (!adminIds.includes(ctx.from!.id)) return reply(ctx, "only the admin can run a rebuild.");
-    await reply(ctx, "wiping my local memory and rebuilding it from walrus…");
+    await reply(ctx, "forgetting everything locally and restoring it from my long-term memory…");
     try {
       const ids = tide.store.usersWithWallets().map((u) => u.id);
       if (!ids.includes(ctx.from!.id)) ids.push(ctx.from!.id);
       const counts = await tide.memory.rebuild(ids);
-      const lines = Object.entries(counts).map(([ns, n]) => `<code>${esc(ns)}</code>: ${n} events`);
-      await reply(ctx, ["<b>rebuilt everything from walrus memory</b>", ...lines].join("\n"));
+      const mine = counts[`tide-user-${ctx.from!.id}`] ?? 0;
+      const market = counts["tide-tokens"] ?? 0;
+      const others = Object.entries(counts).filter(([ns]) => ns !== "tide-tokens" && ns !== `tide-user-${ctx.from!.id}`).length;
+      await reply(
+        ctx,
+        `<b>restored.</b> ${mine} things about you, ${market} market results${others ? ` and ${others} other people` : ""} came back. ask me what i remember to check.`,
+      );
     } catch (err) {
       await reply(ctx, `rebuild failed: ${esc(err instanceof Error ? err.message : String(err))}`);
     }

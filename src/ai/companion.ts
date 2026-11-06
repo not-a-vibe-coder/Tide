@@ -259,7 +259,7 @@ export class Companion {
 
     const recalled = await this.memory.recallFor(userId, text).catch(() => []);
     if (recalled.length) {
-      lines.push("Memories from Walrus related to what they just said:");
+      lines.push("Things you remember that relate to what they just said:");
       for (const m of recalled) lines.push(`- ${m}`);
     }
     return lines.join("\n");

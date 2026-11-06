@@ -128,7 +128,7 @@ describe("companion", () => {
     expect(ctx).toContain("+20.0% since their buy");
     expect(ctx).toContain('they bought because "dex volume rising"');
     expect(ctx).toContain("Max size right now: $10 on a lower-risk one, $2.5 on a high-risk one");
-    expect(ctx).toContain("Memories from Walrus");
+    expect(ctx).toContain("Things you remember that relate");
   });
 
   it("keeps a short chat history", async () => {

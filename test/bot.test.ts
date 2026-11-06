@@ -83,3 +83,21 @@ describe("bot understands plain language", () => {
     expect(sent.at(-1)).toContain("paste your sui or solana wallet");
   });
 });
+
+describe("no storage plumbing in what users see", () => {
+  const PLUMBING = /walrus|namespace|tide-user-|tide-tokens|stored ·|on the way|dry run|saving to/i;
+
+  it("help, memory report and replies stay in plain language", async () => {
+    const { sent, say } = harness();
+    await say("/start");
+    await say("/help");
+    await say("set my budget to $30");
+    await say("turn on launch alerts");
+    await say("what do you remember about me");
+    expect(sent.length).toBeGreaterThanOrEqual(5);
+    for (const msg of sent) expect(msg).not.toMatch(PLUMBING);
+    expect(sent.at(-1)).toContain("here's what i remember about you");
+    expect(sent.at(-1)).toContain("$30 left this week");
+    expect(sent.at(-1)).toContain("launch alerts on");
+  });
+});

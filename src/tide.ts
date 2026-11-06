@@ -10,7 +10,6 @@ import { NO_REASON, alertMessage, esc, holdingLine, pct, usd, type HoldingView }
 import type { CoinInfo } from "./chain/sui.js";
 import { log } from "./log.js";
 import type { Market } from "./market/gecko.js";
-import { SHARED_NAMESPACE, userNamespace } from "./memory/events.js";
 import type { Store, User } from "./memory/store.js";
 import type { Memory } from "./memory/walrus.js";
 
@@ -551,28 +550,54 @@ export class Tide {
 
   memoryReport(userId: number): string {
     const user = this.store.getUser(userId);
-    const ns = userNamespace(userId);
-    const stats = this.store.memoryStats(ns);
-    const outcomesNew = this.store.outcomes(userId, "new");
-    const outcomesEst = this.store.outcomes(userId, "established");
-    const muted = ["new", "established"].filter((c) => this.store.getPref(userId, `mute_${c}`) === "true");
-    const lines = [
-      "<b>here's what i remember about you</b>",
-      `wallet: ${user?.wallet ? `<code>${user.wallet}</code>` : "you haven't given me one yet"}`,
-      `weekly budget: ${user?.budgetUsd != null ? usd(user.budgetUsd) : "not set"}, ${Math.round((user?.baseShare ?? 0.25) * 100)}% per alert`,
-      `bags i'm watching: ${this.store.openHoldings(userId).length}`,
-      `brand-new pools: ${record(outcomesNew)}, so your multiplier is ${trackRecordMultiplier(outcomesNew)}`,
-      `established tokens: ${record(outcomesEst)}, so your multiplier is ${trackRecordMultiplier(outcomesEst)}`,
-      `muted: ${muted.length ? muted.map((c) => (c === "new" ? "brand-new pools" : "established tokens")).join(", ") : "nothing"}`,
-      "",
-      `<b>walrus memory</b> (${this.memory.isDryRun ? "dry run" : "mainnet"}), namespace <code>${ns}</code>`,
-      `${stats.confirmed} stored · ${stats.queued} on the way · ${stats.failed} failed${stats.dry_run ? ` · ${stats.dry_run} dry run` : ""}`,
-      (() => {
-        const src = this.store.outcomeSources();
-        return `shared token memory: ${src.live} outcomes from live alerts, ${src.history} from replayed market history`;
-      })(),
+    if (!user) return "i don't know anything about you yet. paste a sui or solana wallet and we'll start.";
+    const spent = this.store.spentSince(userId, startOfWeekLagos());
+    const label = (c: TokenClass) => (c === "new" ? "brand-new pools" : "established tokens");
+    const muted = (["new", "established"] as const).filter((c) => this.store.getPref(userId, `mute_${c}`) === "true");
+    const mutedChains = (["sui", "solana"] as const).filter((c) => this.store.getPref(userId, `mute_chain_${c}`) === "true");
+    const holdings = this.store.openHoldings(userId);
+    const withReason = holdings.filter((h) => h.reason && h.reason !== NO_REASON).length;
+
+    const lines = ["<b>here's what i remember about you</b>"];
+    if (user.wallet) lines.push(`sui wallet: <code>${user.wallet}</code>`);
+    if (user.solWallet) lines.push(`solana wallet: <code>${user.solWallet}</code>`);
+    if (!user.wallet && !user.solWallet) lines.push("no wallet yet, paste one and i'll start watching it");
+    lines.push(
+      user.budgetUsd != null
+        ? `weekly budget: ${usd(user.budgetUsd)}, ${usd(Math.max(0, user.budgetUsd - spent))} left this week, ${Math.round(user.baseShare * 100)}% per alert`
+        : "weekly budget: not set yet",
+    );
+    lines.push(`bags i'm watching: ${holdings.length}${holdings.length ? `, you told me why on ${withReason}` : ""}`);
+
+    lines.push("", "<b>your track record</b>");
+    for (const cls of ["new", "established"] as const) {
+      const own = this.store.outcomes(userId, cls);
+      const tr = this.trackRecord(user, cls);
+      const basis = tr.from === "you" ? record(own) : tr.from === "market" ? "borrowing the market's record until you have 5 results" : "no results yet";
+      lines.push(`${label(cls)}: ${basis}, so i size at ${tr.h}×`);
+    }
+
+    const learned = (["new", "established"] as const)
+      .map((c) => ({ c, s: this.store.sharedWinRate(c) }))
+      .filter(({ s }) => s.total >= 5)
+      .map(({ c, s }) => `${label(c)} were up a day later ${Math.round((s.wins / s.total) * 100)}% of the time (${s.total} cases)`);
+    if (learned.length) lines.push("", "<b>what i've seen in the market</b>", ...learned);
+
+    const settings = [
+      `alerts ${user.alertsOn ? "on" : "paused"}`,
+      `launch alerts ${this.store.getPref(userId, "launches") === "true" ? "on" : "off"}`,
+      ...(mutedChains.length ? [`no ${mutedChains.join(" or ")} alerts`] : []),
+      ...(muted.length ? [`muted ${muted.map(label).join(" and ")}`] : []),
     ];
+    lines.push("", `settings: ${settings.join(", ")}`);
     return lines.join("\n");
+  }
+
+  /** Storage details for the admin's /doctor, never for users. */
+  storageReport(): string {
+    const s = this.store.memoryStats();
+    const src = this.store.outcomeSources();
+    return `${this.memory.isDryRun ? "dry run" : "mainnet"}, ${s.confirmed} writes confirmed, ${s.queued} in flight, ${s.failed} failed${s.dry_run ? `, ${s.dry_run} dry run` : ""}; shared outcomes: ${src.live} live, ${src.history} history`;
   }
 }
 
