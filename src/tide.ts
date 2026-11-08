@@ -599,7 +599,9 @@ export class Tide {
   storageReport(): string {
     const s = this.store.memoryStats();
     const src = this.store.outcomeSources();
-    return `${this.memory.isDryRun ? "dry run" : "mainnet"}, ${s.confirmed} writes confirmed, ${s.queued} in flight, ${s.failed} failed${s.dry_run ? `, ${s.dry_run} dry run` : ""}; shared outcomes: ${src.live} live, ${src.history} history`;
+    const top = s.failed ? this.store.topFailure() : null;
+    const why = top ? ` (mostly: ${top.error.slice(0, 120)}; retried every 30 min)` : "";
+    return `${this.memory.isDryRun ? "dry run" : "mainnet"}, ${s.confirmed} writes confirmed, ${s.queued} in flight, ${s.failed} failed${why}${s.dry_run ? `, ${s.dry_run} dry run` : ""}; shared outcomes: ${src.live} live, ${src.history} history`;
   }
 }
 

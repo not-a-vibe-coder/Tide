@@ -117,10 +117,32 @@ export class Market {
    * A 429 (rate limited) is retried with backoff, honouring Retry-After. Free
    * hosts share outbound IPs, so 429s happen even when Tide itself is polite.
    */
+  private waitingCalls = 0;
   private get<T>(path: string): Promise<T> {
-    const run = this.queue.then(() => this.fetchWithRetry<T>(path));
+    this.waitingCalls++;
+    const run = this.queue.then(() => this.fetchWithRetry<T>(path)).finally(() => this.waitingCalls--);
     this.queue = run.catch(() => undefined);
     return run;
+  }
+
+  /** Calls waiting in the queue right now (a backfill or scan can queue dozens). */
+  get queued(): number {
+    return this.waitingCalls;
+  }
+
+  /**
+   * One direct call that skips the queue, for health checks: a busy queue
+   * (backfill running) shouldn't look like GeckoTerminal being down.
+   */
+  async ping(chain: Chain = "sui"): Promise<number> {
+    const res = await fetch(`${this.baseUrl}/networks/${GECKO_NETWORK[chain]}/trending_pools?page=1&duration=1h`, {
+      headers: { accept: "application/json;version=20230302" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (res.status === 429) throw new Error("rate limited right now (429), tide backs off and retries on its own");
+    if (!res.ok) throw new Error(`GeckoTerminal ${res.status}`);
+    const body = (await res.json()) as { data?: unknown[] };
+    return body.data?.length ?? 0;
   }
 
   private async fetchWithRetry<T>(path: string): Promise<T> {

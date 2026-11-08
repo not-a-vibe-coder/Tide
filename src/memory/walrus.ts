@@ -15,7 +15,9 @@ import {
 import type { Store } from "./store.js";
 
 /** Parallel writes to the Walrus relayer. Keeps a big batch (like a history backfill) from tripping rate limits. */
-const WRITE_SLOTS = 4;
+const WRITE_SLOTS = 2;
+/** Waits before each retry of a failed write. The idempotency key makes a retry safe if the first try landed. */
+const RETRY_DELAYS_MS = [5_000, 20_000, 60_000];
 
 export interface MemoryOptions {
   privateKey: string;
@@ -41,6 +43,7 @@ export class Memory {
   constructor(
     private readonly store: Store,
     opts: MemoryOptions,
+    private readonly retryDelaysMs: number[] = RETRY_DELAYS_MS,
   ) {
     this.client =
       opts.client ??
@@ -93,19 +96,42 @@ export class Memory {
       log.debug("memory (dry run)", encodeEvent(event));
       return;
     }
-    const release = await this.slot();
-    try {
-      const job = await this.client.rememberAsync(encodeEvent(event), namespace, { idempotencyKey: event.id });
-      this.store.logMemory(event.id, namespace, "queued", { jobId: job.job_id });
-      const done = await this.client.waitForRememberJob(job.job_id, { timeoutMs: 5 * 60_000 });
-      this.store.logMemory(event.id, namespace, "confirmed", { jobId: job.job_id, blobId: done.blob_id });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.store.logMemory(event.id, namespace, "failed", { error: message });
-      log.warn(`Walrus write failed for ${event.data.type} ${event.id}: ${message}`);
-    } finally {
-      release();
+    for (let attempt = 0; ; attempt++) {
+      const release = await this.slot();
+      let message: string;
+      try {
+        const job = await this.client.rememberAsync(encodeEvent(event), namespace, { idempotencyKey: event.id });
+        this.store.logMemory(event.id, namespace, "queued", { jobId: job.job_id });
+        const done = await this.client.waitForRememberJob(job.job_id, { timeoutMs: 5 * 60_000 });
+        this.store.logMemory(event.id, namespace, "confirmed", { jobId: job.job_id, blobId: done.blob_id });
+        return;
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      } finally {
+        release();
+      }
+      // A bad key won't fix itself; anything else (rate limit, timeout, relayer hiccup) gets another go.
+      const permanent = /\b(401|403)\b|unauthori[sz]ed|forbidden/i.test(message);
+      if (permanent || attempt >= this.retryDelaysMs.length) {
+        this.store.logMemory(event.id, namespace, "failed", { error: message });
+        log.warn(`Walrus write failed for ${event.data.type} ${event.id} after ${attempt + 1} tries: ${message}`);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, this.retryDelaysMs[attempt]));
     }
+  }
+
+  /**
+   * Try failed writes again (oldest first). Events stay in the local cache, so
+   * nothing is lost while the relayer is having a bad moment. Returns how many were re-sent.
+   */
+  retryFailed(limit = 40): number {
+    const events = this.store.failedEvents(limit);
+    for (const e of events) {
+      const p = this.persist(e).finally(() => this.inflight.delete(p));
+      this.inflight.add(p);
+    }
+    return events.length;
   }
 
   /** Read back every Tide event stored in a namespace. */

@@ -98,6 +98,7 @@ async function main() {
     tz,
   );
   cron.schedule("7 * * * *", guard("outcomes", () => tide.resolveOutcomes()), tz);
+  cron.schedule("*/30 * * * *", guard("memory retry", async () => memory.retryFailed()), tz);
   cron.schedule(`0 ${cfg.DIGEST_HOUR_LAGOS} * * *`, guard("digest", () => tide.sendDigests()), tz);
 
   // Learn from market history: once a day, and a minute after startup if shared memory is thin.

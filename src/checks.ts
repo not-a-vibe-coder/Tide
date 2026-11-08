@@ -3,7 +3,6 @@ import { Bot } from "grammy";
 import { SolanaReader } from "./chain/solana.js";
 import { SuiReader } from "./chain/sui.js";
 import type { Config } from "./config.js";
-import { SUI_COIN_TYPE } from "./core/buys.js";
 import { Market } from "./market/gecko.js";
 import { Store } from "./memory/store.js";
 import { Memory } from "./memory/walrus.js";
@@ -99,13 +98,9 @@ export async function runChecks(
         ]
       : []),
     await check("GeckoTerminal", async () => {
-      const parts: string[] = [];
-      for (const chain of cfg.CHAINS) {
-        const pools = await market.candidatePools(chain);
-        parts.push(`${pools.length} ${chain} pools`);
-      }
-      const price = await market.quote(SUI_COIN_TYPE);
-      return `${parts.join(", ")}, SUI at $${price?.priceUsd.toFixed(3) ?? "?"}`;
+      const n = await market.ping(cfg.CHAINS[0]);
+      const busy = market.queued ? `, ${market.queued} calls queued behind a scan or backfill` : "";
+      return `${n} trending ${cfg.CHAINS[0]} pools${busy}`;
     }),
     await check("Walrus Memory", async () => {
       const store = new Store(":memory:");

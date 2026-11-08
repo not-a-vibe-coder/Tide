@@ -205,6 +205,22 @@ export class Store {
       .run(eventId, namespace, status, extra.jobId ?? null, extra.blobId ?? null, extra.error ?? null, new Date().toISOString());
   }
 
+  /** Events whose Walrus write failed, oldest first, ready to be sent again. */
+  failedEvents(limit: number): TideEvent[] {
+    const rows = this.db
+      .prepare("SELECT e.json FROM memory_log m JOIN events e ON e.id = m.event_id WHERE m.status = 'failed' ORDER BY e.at LIMIT ?")
+      .all(limit) as { json: string }[];
+    return rows.map((r) => JSON.parse(r.json) as TideEvent);
+  }
+
+  /** The most common recent failure reason, for the admin storage line. */
+  topFailure(): { error: string; n: number } | null {
+    const r = this.db
+      .prepare("SELECT error, COUNT(*) n FROM memory_log WHERE status = 'failed' AND error IS NOT NULL GROUP BY error ORDER BY n DESC LIMIT 1")
+      .get() as { error: string; n: number } | undefined;
+    return r ?? null;
+  }
+
   memoryStats(namespace?: string): Record<MemoryStatus, number> {
     const rows = (
       namespace
