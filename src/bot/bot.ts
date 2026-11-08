@@ -39,6 +39,20 @@ function parseWallet(text: string): { chain: Chain; address: string } | null {
   return null;
 }
 
+/**
+ * "hey tide, top 5 on solana" or "what do you think of $WIF, tide?" call the bot by name.
+ * Returns the message without the name, or null when it isn't talking to tide.
+ * "the tide is turning" doesn't count: the name has to open the message (after an
+ * optional greeting) or close it after a comma.
+ */
+export function calledByName(text: string): string | null {
+  const start = /^\s*(?:(?:hey|hi|hello|yo|ok|okay|oya|abeg|sup|gm|so)[\s,]+)?tide\b[\s,:!.?-]*/i;
+  if (start.test(text)) return text.replace(start, "").trim();
+  const end = /,\s*tide\s*([?!.]*)\s*$/i;
+  if (end.test(text)) return text.replace(end, "$1").trim();
+  return null;
+}
+
 /** Looks like a question to the bot, not an answer to "why did you buy". */
 const QUESTION =
   /\?\s*$|\$[A-Za-z]|::|^(what|how|why|should|is|are|can|could|do|does|did|when|which|who|where|tell me|show me|thoughts|rate|check|abeg|wetin|how far)\b/i;
@@ -117,7 +131,7 @@ export function createBot(token: string, tide: Tide, opts: BotOptions): Bot {
       [
         "hey everyone, i'm <b>tide</b>. i watch sui and solana for tokens that start moving and read the red flags before anyone apes.",
         "",
-        `tag me with a token, like <code>@${username()} thoughts on $WIF</code>, or ask <code>@${username()} top 5 on solana</code>. you can also reply to any of my messages.`,
+        `call me by name, like <code>hey tide, thoughts on $WIF?</code> or <code>tide top 5 on solana</code>. tagging me or replying to my messages works too.`,
         "for alerts sized to your own budget and wallet, message me privately. nfa, always.",
       ].join("\n"),
       dmButton(),
@@ -147,8 +161,9 @@ export function createBot(token: string, tide: Tide, opts: BotOptions): Bot {
     const me = new RegExp(`@${username()}\\b`, "gi");
     const tagged = me.test(ctx.message.text);
     const repliedToMe = ctx.message.reply_to_message?.from?.id === bot.botInfo.id;
-    if (!tagged && !repliedToMe) return;
-    const text = ctx.message.text.replace(me, "").trim();
+    const named = calledByName(ctx.message.text);
+    if (!tagged && !repliedToMe && named === null) return;
+    const text = (named ?? ctx.message.text).replace(me, "").trim();
     if (!text) return reply(ctx, `yes? ask me about any token, like <code>@${username()} thoughts on $WIF</code>, or <code>top 5 on solana</code>.`);
 
     const wallet = parseWallet(text);

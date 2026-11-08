@@ -116,7 +116,7 @@ You don't need them. Plain words work for every setting and action, in English o
 
 ### In groups
 
-Add @usetidebot to a group and it says hello. It only answers when someone tags it (`@usetidebot thoughts on $WIF`) or replies to one of its messages, so it never floods the chat. Token reads and top lists work in the group. Anything personal (wallets, budgets, bags, alerts) gets a button to continue in private, and personal alerts always go to the private chat. It works with Telegram's default privacy mode, so nothing needs changing in BotFather.
+Add @usetidebot to a group and it says hello. It only answers when someone calls it by name (`hey tide, thoughts on $WIF?`), tags it, or replies to one of its messages, so it never floods the chat. Token reads and top lists work in the group. Anything personal (wallets, budgets, bags, alerts) gets a button to continue in private, and personal alerts always go to the private chat. Tags and replies work with Telegram's default privacy mode. For "hey tide" to work, turn privacy mode off in BotFather (`/setprivacy` → Disable) and re-add the bot to the group, or make it a group admin.
 
 ## Deploy
 

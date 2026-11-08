@@ -1,6 +1,6 @@
 import { MemWalMock } from "@mysten-incubation/memwal";
 import { describe, expect, it } from "vitest";
-import { createBot } from "../src/bot/bot.js";
+import { calledByName, createBot } from "../src/bot/bot.js";
 import type { Market } from "../src/market/gecko.js";
 import { Store } from "../src/memory/store.js";
 import { Memory } from "../src/memory/walrus.js";
@@ -134,7 +134,7 @@ describe("groups", () => {
   it("says hello when added and explains how to tag it", async () => {
     const { sent, payloads, added } = harness();
     await added();
-    expect(sent.at(-1)).toContain("tag me with a token");
+    expect(sent.at(-1)).toContain("call me by name");
     expect(payloads.at(-1).chat_id).toBe(-100500);
     expect(JSON.stringify(payloads.at(-1).reply_markup)).toContain("t.me/usetidebot");
   });
@@ -179,6 +179,30 @@ describe("groups", () => {
     await group("/start@otherbot");
     expect(sent).toHaveLength(0);
     await group("/start@usetidebot");
-    expect(sent.at(-1)).toContain("tag me with a token");
+    expect(sent.at(-1)).toContain("call me by name");
+  });
+});
+
+describe("calling tide by name", () => {
+  it("spots the name at the start or after a comma at the end", () => {
+    expect(calledByName("hey tide")).toBe("");
+    expect(calledByName("Hey Tide, top 5 on solana")).toBe("top 5 on solana");
+    expect(calledByName("tide what's moving")).toBe("what's moving");
+    expect(calledByName("oya tide check $WIF")).toBe("check $WIF");
+    expect(calledByName("thoughts on $WIF, tide?")).toBe("thoughts on $WIF?");
+  });
+
+  it("ignores the word in normal chat", () => {
+    expect(calledByName("the tide is turning")).toBeNull();
+    expect(calledByName("riding the tide today")).toBeNull();
+    expect(calledByName("tidepool app is cool")).toBeNull();
+  });
+
+  it("answers 'hey tide' in a group", async () => {
+    const { sent, group } = harness();
+    await group("hey tide");
+    expect(sent).toHaveLength(1);
+    await group("the tide is turning");
+    expect(sent).toHaveLength(1);
   });
 });
