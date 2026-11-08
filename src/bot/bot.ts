@@ -47,7 +47,7 @@ function keyboard(buttons?: Button[][]): InlineKeyboard | undefined {
   if (!buttons?.length) return undefined;
   const kb = new InlineKeyboard();
   buttons.forEach((row, i) => {
-    for (const b of row) kb.text(b.text, b.data);
+    for (const b of row) (b.url ? kb.url(b.text, b.url) : kb.text(b.text, b.data));
     if (i < buttons.length - 1) kb.row();
   });
   return kb;
@@ -85,14 +85,94 @@ export function createBot(token: string, tide: Tide, opts: BotOptions): Bot {
   };
   tide.attach(notifier);
 
+  const inGroup = (ctx: Context) => ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+
+  // In a group, answer as a reply to the message that asked, so the thread stays readable.
   const reply = (ctx: Context, html: string, buttons?: Button[][]) =>
-    ctx.reply(html, { parse_mode: "HTML", reply_markup: keyboard(buttons), link_preview_options: { is_disabled: true } });
+    ctx.reply(html, {
+      parse_mode: "HTML",
+      reply_markup: keyboard(buttons),
+      link_preview_options: { is_disabled: true },
+      ...(inGroup(ctx) && ctx.message ? { reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true } } : {}),
+    });
 
   const ensureUser = (ctx: Context) => {
     tide.setName(ctx.from!.id, ctx.from!.first_name);
+    // Personal alerts always go to the private chat (its id is the user's id), never to a group.
+    const existing = tide.store.getUser(ctx.from!.id);
+    if (inGroup(ctx)) return existing ?? tide.start(ctx.from!.id, ctx.from!.id);
     return tide.start(ctx.from!.id, ctx.chat!.id);
   };
   const hey = (ctx: Context) => (ctx.from?.first_name ? `${esc(ctx.from.first_name.toLowerCase())}, ` : "");
+
+  // ---- groups: answer when tagged or replied to; keep anything personal in private ----
+
+  const username = () => bot.botInfo.username;
+  const dmButton = (): Button[][] => [[{ text: "message me privately", data: "dm", url: `https://t.me/${username()}?start=hi` }]];
+  const toPrivate = (ctx: Context) =>
+    reply(ctx, `${hey(ctx)}let's do that in private, your wallet and bags shouldn't be out in a group.`, dmButton());
+  const groupHello = (ctx: Context) =>
+    reply(
+      ctx,
+      [
+        "hey everyone, i'm <b>tide</b>. i watch sui and solana for tokens that start moving and read the red flags before anyone apes.",
+        "",
+        `tag me with a token, like <code>@${username()} thoughts on $WIF</code>, or ask <code>@${username()} top 5 on solana</code>. you can also reply to any of my messages.`,
+        "for alerts sized to your own budget and wallet, message me privately. nfa, always.",
+      ].join("\n"),
+      dmButton(),
+    );
+  const PERSONAL_COMMANDS = new Set(["wallet", "budget", "share", "holdings", "check", "scan", "alerts", "launches", "memory", "doctor", "backfill", "rebuild"]);
+
+  bot.on("my_chat_member", async (ctx) => {
+    const was = ctx.myChatMember.old_chat_member.status;
+    const now = ctx.myChatMember.new_chat_member.status;
+    if (inGroup(ctx) && (was === "left" || was === "kicked") && (now === "member" || now === "administrator")) {
+      await groupHello(ctx).catch((err) => log.warn("group hello failed", err));
+    }
+  });
+
+  bot.use(async (ctx, next) => {
+    const text = ctx.message?.text;
+    if (!inGroup(ctx) || !text?.startsWith("/")) return next();
+    const [, name = "", target] = text.match(/^\/([a-z_]+)(?:@(\w+))?/i) ?? [];
+    if (target && target.toLowerCase() !== username().toLowerCase()) return; // meant for another bot
+    const cmd = name.toLowerCase();
+    if (cmd === "start" || cmd === "help") return groupHello(ctx);
+    if (PERSONAL_COMMANDS.has(cmd)) return toPrivate(ctx);
+    return next();
+  });
+
+  async function groupText(ctx: Context & { message: { text: string } }) {
+    const me = new RegExp(`@${username()}\\b`, "gi");
+    const tagged = me.test(ctx.message.text);
+    const repliedToMe = ctx.message.reply_to_message?.from?.id === bot.botInfo.id;
+    if (!tagged && !repliedToMe) return;
+    const text = ctx.message.text.replace(me, "").trim();
+    if (!text) return reply(ctx, `yes? ask me about any token, like <code>@${username()} thoughts on $WIF</code>, or <code>top 5 on solana</code>.`);
+
+    const wallet = parseWallet(text);
+    if (wallet && !(wallet.chain === "solana" && (await tide.isSolanaMint(wallet.address)))) return toPrivate(ctx);
+    const intent = wallet ? null : parseIntent(text);
+    if (intent?.action === "top") return act.top(ctx, intent.chains);
+    if (intent?.action === "help") return groupHello(ctx);
+    if (intent) return toPrivate(ctx);
+
+    if (companion?.enabled) {
+      const typing = () => ctx.replyWithChatAction("typing").catch(() => {});
+      void typing();
+      const keepTyping = setInterval(typing, 4_500);
+      const answer = await companion
+        .replyInGroup(ctx.chat!.id, ctx.from?.first_name, text)
+        .catch((err) => {
+          log.warn("group chat failed", err);
+          return null;
+        })
+        .finally(() => clearInterval(keepTyping));
+      if (answer) return reply(ctx, toTelegramHtml(answer));
+    }
+    return reply(ctx, `i can read any token or list the top ones here, try <code>@${username()} top 5 on solana</code>. for your wallet and alerts, message me privately.`, dmButton());
+  }
 
   async function saveWallet(ctx: Context, address: string, chain: Chain) {
     const userId = ctx.from!.id;
@@ -400,6 +480,7 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
   });
 
   bot.on("message:text", async (ctx) => {
+    if (inGroup(ctx)) return groupText(ctx);
     const user = ensureUser(ctx);
     const text = ctx.message.text.trim();
     if (text.startsWith("/")) return;

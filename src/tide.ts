@@ -17,7 +17,9 @@ export type AlertAction = "bought" | "skipped" | "not_for_me";
 
 export interface Button {
   text: string;
+  /** Callback data, or a link when `url` is set. */
   data: string;
+  url?: string;
 }
 
 /** How Tide talks to users. The Telegram bot implements this. */

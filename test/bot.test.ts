@@ -16,8 +16,12 @@ function harness() {
   const bot = createBot("123:test", tide, { adminIds: [] });
   bot.botInfo = { id: 1, is_bot: true, first_name: "Tide", username: "usetidebot" } as never;
   const sent: string[] = [];
+  const payloads: any[] = [];
   bot.api.config.use(async (_prev, method, payload: any) => {
-    if (method === "sendMessage") sent.push(payload.text);
+    if (method === "sendMessage") {
+      sent.push(payload.text);
+      payloads.push(payload);
+    }
     return { ok: true, result: method === "sendMessage" ? { message_id: 1, date: 0, chat: { id: 7, type: "private" } } : true } as never;
   });
   let id = 0;
@@ -33,7 +37,31 @@ function harness() {
         ...(text.startsWith("/") ? { entities: [{ type: "bot_command", offset: 0, length: text.split(" ")[0]!.length }] } : {}),
       },
     } as never);
-  return { store, sent, say };
+  const group = (text: string, extra: Record<string, unknown> = {}) =>
+    bot.handleUpdate({
+      update_id: ++id,
+      message: {
+        message_id: id,
+        date: 0,
+        chat: { id: -100500, type: "supergroup", title: "degens" },
+        from: { id: 7, is_bot: false, first_name: "Pascal" },
+        text,
+        ...(text.startsWith("/") ? { entities: [{ type: "bot_command", offset: 0, length: text.split(" ")[0]!.length }] } : {}),
+        ...extra,
+      },
+    } as never);
+  const added = () =>
+    bot.handleUpdate({
+      update_id: ++id,
+      my_chat_member: {
+        chat: { id: -100500, type: "supergroup", title: "degens" },
+        from: { id: 7, is_bot: false, first_name: "Pascal" },
+        date: 0,
+        old_chat_member: { status: "left", user: { id: 1, is_bot: true, first_name: "Tide" } },
+        new_chat_member: { status: "member", user: { id: 1, is_bot: true, first_name: "Tide" } },
+      },
+    } as never);
+  return { store, sent, payloads, say, group, added };
 }
 
 describe("bot understands plain language", () => {
@@ -99,5 +127,58 @@ describe("no storage plumbing in what users see", () => {
     expect(sent.at(-1)).toContain("here's what i remember about you");
     expect(sent.at(-1)).toContain("$30 left this week");
     expect(sent.at(-1)).toContain("launch alerts on");
+  });
+});
+
+describe("groups", () => {
+  it("says hello when added and explains how to tag it", async () => {
+    const { sent, payloads, added } = harness();
+    await added();
+    expect(sent.at(-1)).toContain("tag me with a token");
+    expect(payloads.at(-1).chat_id).toBe(-100500);
+    expect(JSON.stringify(payloads.at(-1).reply_markup)).toContain("t.me/usetidebot");
+  });
+
+  it("stays quiet unless tagged or replied to", async () => {
+    const { sent, group } = harness();
+    await group("anyone buying today?");
+    expect(sent).toHaveLength(0);
+    await group("@usetidebot hey");
+    expect(sent).toHaveLength(1);
+    await group("and you?", { reply_to_message: { message_id: 1, date: 0, chat: { id: -100500, type: "supergroup" }, from: { id: 1, is_bot: true, first_name: "Tide" }, text: "hi" } });
+    expect(sent).toHaveLength(2);
+  });
+
+  it("answers as a reply to the message that tagged it", async () => {
+    const { payloads, group } = harness();
+    await group("@usetidebot hey");
+    expect(payloads.at(-1).reply_parameters.message_id).toBeGreaterThan(0);
+  });
+
+  it("keeps wallets, budgets and bags out of the group", async () => {
+    const { store, sent, group } = harness();
+    await group(`@usetidebot 0x${"1".repeat(64)}`);
+    expect(sent.at(-1)).toContain("in private");
+    expect(store.getUser(7)?.wallet ?? null).toBeNull();
+    await group("@usetidebot set my budget to 40");
+    expect(sent.at(-1)).toContain("in private");
+    expect(store.getUser(7)?.budgetUsd ?? null).toBeNull();
+    await group("/holdings");
+    expect(sent.at(-1)).toContain("in private");
+  });
+
+  it("never moves someone's private alerts into the group", async () => {
+    const { store, say, group } = harness();
+    await say("/start");
+    await group("@usetidebot hey");
+    expect(store.getUser(7)!.chatId).toBe(7);
+  });
+
+  it("ignores commands meant for another bot", async () => {
+    const { sent, group } = harness();
+    await group("/start@otherbot");
+    expect(sent).toHaveLength(0);
+    await group("/start@usetidebot");
+    expect(sent.at(-1)).toContain("tag me with a token");
   });
 });

@@ -75,6 +75,37 @@ export class Companion {
     return reply;
   }
 
+  /**
+   * Reply in a group chat. Nothing personal goes in: no wallets, budgets, positions
+   * or private memories, because everyone in the group can read the answer.
+   * History and the last list are kept per group, so follow-ups work there.
+   */
+  async replyInGroup(chatId: number, firstName: string | undefined, text: string): Promise<string | null> {
+    if (!this.llm.enabled) return null;
+    const lines = [
+      `You're in a Telegram group chat. ${firstName ?? "Someone"} just tagged you.`,
+      `Today: ${new Date().toISOString().slice(0, 10)}`,
+      "Everyone in this group can read your reply. Never mention anyone's wallet, budget, positions, alerts or track record here, even if asked. For anything personal (their wallet, bags, budget, alerts, sizing), tell them to message you privately at @usetidebot.",
+      "Keep it short, this is a group. Token reads and top lists are fine.",
+    ];
+    for (const cls of ["new", "established"] as const) {
+      const s = this.store.sharedWinRate(cls);
+      if (s.total >= 3) lines.push(`Across market history and all Tide users, ${classLabel(cls)} were up 24h after ${s.wins} of ${s.total} signals.`);
+    }
+    lines.push(...(await this.marketOverview(chatId, text)));
+    lines.push(...(await this.tokenLookups(chatId, text)));
+    const past = this.history.get(chatId) ?? [];
+    const raw = await this.llm.chat([
+      { role: "system", content: systemPrompt(this.creator, lines.join("\n")) },
+      ...past,
+      { role: "user", content: firstName ? `${firstName}: ${text}` : text },
+    ]);
+    const reply = raw ? cleanReply(raw) : "";
+    if (!reply) return null;
+    this.remember(chatId, text, reply);
+    return reply;
+  }
+
   private remember(userId: number, text: string, reply: string) {
     const h = this.history.get(userId) ?? [];
     h.push({ role: "user", content: text }, { role: "assistant", content: reply });

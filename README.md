@@ -114,6 +114,10 @@ You don't need them. Plain words work for every setting and action, in English o
 | `/backfill` | Replay a week of market history into shared memory (admin only) |
 | `/rebuild` | Wipe test (admin only) |
 
+### In groups
+
+Add @usetidebot to a group and it says hello. It only answers when someone tags it (`@usetidebot thoughts on $WIF`) or replies to one of its messages, so it never floods the chat. Token reads and top lists work in the group. Anything personal (wallets, budgets, bags, alerts) gets a button to continue in private, and personal alerts always go to the private chat. It works with Telegram's default privacy mode, so nothing needs changing in BotFather.
+
 ## Deploy
 
 Tide uses long polling, so it runs on any always-on Node host. On Render's free web service it pings its own public URL (`RENDER_EXTERNAL_URL`, set by Render) every 10 minutes, because the free plan sleeps after 15 minutes without inbound traffic and Telegram polling doesn't count. Set `KEEP_AWAKE_URL` to override. On Railway or Render: create a service from this repo, set the build command to `npm install && npm run build`, the start command to `npm start`, add the `.env` variables, and attach a persistent volume at `./data` for the cache. If the volume is lost, `/rebuild` restores it from Walrus Memory.
