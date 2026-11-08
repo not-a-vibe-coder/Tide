@@ -1,0 +1,8 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "echo 'landing page only, nothing to install'",
+  "buildCommand": "echo 'landing page only, nothing to build'",
+  "outputDirectory": "web",
+  "cleanUrls": true
+}
