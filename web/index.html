@@ -1,0 +1,873 @@
+<!doctype html>
+<html lang="en" class="anim">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tide Trading Bot</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Tide watches Sui and Solana for tokens that start moving, reads the red flags, remembers why you bought, and sizes every alert from your own budget and track record.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=Inter:wght@100..900&family=JetBrains+Mono:wght@100..800&family=Ms+Madi&display=swap">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script src="https://cdn.jsdelivr.net/npm/lenis@1.1.13/dist/lenis.min.js"></script>
+<style>
+/* Layout: one 1440×900 frame per screen, positions in --ux / --u units, fixed WebGL tide behind real HTML */
+:root{
+  --ink:#ffffff;            /* all primary text */
+  --page:#091618;           /* deep water: page, clear colour, dissolve dots */
+  --grey:#87999a;           /* secondary copy */
+  --line:rgba(255,255,255,.13);
+  --foam:#7aeed6;           /* neon signature, accents */
+  --glow:#16c6a4;
+  --sans:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --wide:"Archivo","Archivo Wide",system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --script:"Ms Madi","Brush Script MT",cursive;
+  --ux:calc(100vw / 1440);
+  --u:min(calc(100vw / 1440), calc(100vh / 900));
+  color-scheme:dark;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:var(--page);color:var(--ink);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+body{background:var(--page);font-family:var(--sans);overflow-x:hidden;min-height:100%}
+a{color:inherit;text-decoration:none}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+:focus-visible{outline:1px solid var(--foam);outline-offset:4px}
+html.lenis,html.lenis body{height:auto}
+.lenis.lenis-smooth{scroll-behavior:auto!important}
+
+#gl{position:fixed;inset:0;width:100vw;height:100vh;z-index:0;pointer-events:none;opacity:0;transition:opacity 1s ease}
+#gl.on{opacity:1}
+main{position:relative;z-index:1;overflow-x:clip}
+.screen{position:relative;height:100vh;height:100svh;background:transparent}
+.frame{position:absolute;inset:0}
+.frame>*{position:absolute}
+
+/* ---------- fixed chrome ---------- */
+.nav,.foot{position:fixed;left:0;right:0;z-index:20;pointer-events:none;
+  padding-left:max(calc(63 * var(--ux)), env(safe-area-inset-left,0px));
+  padding-right:max(calc(62 * var(--ux)), env(safe-area-inset-right,0px))}
+.nav>*,.foot>*{pointer-events:auto}
+.nav{top:0;padding-top:env(safe-area-inset-top,0px);height:calc(max(32px, 36 * var(--u)) + env(safe-area-inset-top,0px));
+  display:flex;align-items:center;justify-content:space-between}
+.mark{font-family:var(--wide);font-weight:800;font-stretch:100%;font-size:max(12px, calc(16 * var(--u)));letter-spacing:-.01em;display:flex;align-items:baseline;gap:.6em}
+.mark small{font-family:var(--mono);font-weight:400;font-size:.78em;opacity:.6;letter-spacing:0}
+.links{display:flex;gap:calc(50 * var(--ux));font-family:var(--mono);font-size:max(11px, calc(16.7 * var(--u)))}
+.ul{position:relative;display:inline-block}
+.ul::after{content:"";position:absolute;left:0;right:0;bottom:-3px;height:1px;background:currentColor;transform:scaleX(0);transform-origin:right;transition:transform .35s cubic-bezier(.2,.7,.2,1)}
+.ul:hover::after,.ul:focus-visible::after{transform:scaleX(1);transform-origin:left}
+
+.foot{bottom:calc(28 * var(--u) + env(safe-area-inset-bottom,0px));height:calc(58 * var(--u));display:grid;grid-template-columns:1fr auto 1fr;align-items:center;font-family:var(--mono);font-size:max(11px, calc(16.7 * var(--u)));font-variant-numeric:tabular-nums}
+.foot .clock{white-space:pre}
+.foot .globe{justify-self:end;width:calc(47 * var(--u));height:auto;display:block}
+.globe .mer{transform-origin:24px 14px;transform-box:view-box;animation:spin 6s linear infinite}
+@keyframes spin{0%{transform:scaleX(1)}50%{transform:scaleX(-1)}100%{transform:scaleX(1)}}
+
+/* ---------- hero ---------- */
+.grid{inset:0;pointer-events:none}
+.grid i{position:absolute;display:block;background:var(--line)}
+.grid .v{top:0;bottom:0;width:1px}
+.grid .h{left:0;right:0;height:1px}
+.cross{position:absolute;width:calc(13 * var(--u));height:calc(13 * var(--u));transform:translate(-50%,-50%);opacity:.7}
+.cross::before,.cross::after{content:"";position:absolute;background:#fff}
+.cross::before{left:50%;top:0;bottom:0;width:1px;transform:translateX(-.5px)}
+.cross::after{top:50%;left:0;right:0;height:1px;transform:translateY(-.5px)}
+
+.lede{left:calc(63 * var(--ux));top:calc(68 * var(--u));font-size:calc(30 * var(--u));line-height:calc(37 * var(--u));letter-spacing:-.02em;font-weight:400}
+.mono{font-family:var(--mono);font-size:calc(16.7 * var(--u));line-height:calc(25 * var(--u));white-space:pre}
+.m1{left:calc(505 * var(--ux));top:calc(70 * var(--u))}
+.m2{left:calc(957 * var(--ux));top:calc(70 * var(--u))}
+h1{left:calc(60 * var(--ux));bottom:calc(126 * var(--u));font-family:var(--wide);font-weight:800;font-stretch:112%;font-size:calc(77 * var(--u));line-height:calc(78 * var(--u));letter-spacing:-.012em;text-transform:uppercase}
+h1>span{display:block;overflow:hidden;padding-bottom:calc(4 * var(--u));margin-bottom:calc(-4 * var(--u))}
+h1 em{display:block;font-style:normal}
+
+.cta{left:calc(957 * var(--ux));bottom:calc(126 * var(--u));display:flex;flex-direction:column;gap:calc(14 * var(--u));align-items:flex-start}
+.btn{display:inline-flex;align-items:center;gap:calc(12 * var(--u));padding:calc(15 * var(--u)) calc(24 * var(--u));border-radius:999px;
+  background:var(--ink);color:var(--page);font-family:var(--wide);font-weight:800;font-stretch:106%;font-size:max(13px, calc(17 * var(--u)));letter-spacing:-.005em;
+  box-shadow:0 0 0 1px rgba(255,255,255,.4),0 10px 40px rgba(22,198,164,.35);transition:transform .35s cubic-bezier(.2,.7,.2,1),box-shadow .35s}
+.btn:hover{transform:translateY(-2px);box-shadow:0 0 0 1px #fff,0 14px 50px rgba(122,238,214,.55)}
+.btn svg{width:1.05em;height:1.05em;flex:none}
+.soon{display:inline-flex;align-items:center;gap:calc(10 * var(--u));font-family:var(--mono);font-size:max(11px, calc(14 * var(--u)));color:rgba(255,255,255,.78);padding:calc(8 * var(--u)) calc(14 * var(--u));border:1px solid rgba(255,255,255,.28);border-radius:999px;background:rgba(9,22,24,.25);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.soon b{width:7px;height:7px;border-radius:50%;background:var(--foam);box-shadow:0 0 8px var(--glow);animation:pulse 2.4s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35}}
+.handle{font-family:var(--mono);font-size:max(11px, calc(13 * var(--u)));color:rgba(255,255,255,.62)}
+
+html.anim .hgrid,html.anim .nav,html.anim .foot,html.anim .lede,html.anim .m1,html.anim .m2,html.anim .cta,html.anim h1 em{opacity:0}
+
+/* ---------- about ---------- */
+.agrid i{background:rgba(255,255,255,.075)}
+.agrid .cross{opacity:.35}
+.dots{width:calc(64 * var(--u));height:calc(64 * var(--u));opacity:.45;
+  background-image:radial-gradient(circle, rgba(255,255,255,.55) calc(1.1 * var(--u)), transparent calc(2.5 * var(--u)));
+  background-size:calc(8 * var(--u)) calc(8 * var(--u));
+  -webkit-mask-image:radial-gradient(circle, #000 30%, transparent 70%);mask-image:radial-gradient(circle, #000 30%, transparent 70%)}
+.d1{left:calc(303 * var(--ux));top:calc(626 * var(--u))}
+.d2{left:calc(1004 * var(--ux));top:calc(712 * var(--u))}
+
+/* example Telegram alert, in place of a portrait */
+.card{left:calc(62 * var(--ux));top:calc(179 * var(--u));width:calc(321 * var(--u));min-height:calc(323 * var(--u));
+  border-radius:calc(18 * var(--u));padding:calc(18 * var(--u));
+  background:linear-gradient(160deg,#103638 0%,#0b2224 60%,#0a1d1f 100%);
+  border:1px solid rgba(122,238,214,.22);box-shadow:0 30px 80px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.06);
+  font-size:calc(13.2 * var(--u));line-height:1.42;color:#e9fbf6}
+.card .who{display:flex;align-items:center;gap:calc(9 * var(--u));font-family:var(--mono);font-size:calc(11.5 * var(--u));color:var(--grey);margin-bottom:calc(10 * var(--u))}
+.card .av{width:calc(24 * var(--u));height:calc(24 * var(--u));border-radius:50%;background:radial-gradient(circle at 35% 30%,#c8f6ea,#16c6a4 60%,#0f6b66);flex:none}
+.card .bubble{display:flex;flex-direction:column;gap:calc(7 * var(--u))}
+.card p{margin:0}
+.card .t{font-weight:600}
+.card .k{color:var(--grey);font-family:var(--mono);font-size:calc(11.5 * var(--u))}
+.card .flag{color:#ffd29a}
+.card .size{color:#fff}
+.card .size b{color:var(--foam)}
+.card .f{color:var(--grey);font-style:italic;font-size:calc(11.5 * var(--u))}
+.card .btns{display:grid;grid-template-columns:repeat(3,1fr);gap:calc(5 * var(--u));margin-top:calc(12 * var(--u))}
+.card .btns span{text-align:center;padding:calc(7 * var(--u)) 0;border-radius:calc(8 * var(--u));background:rgba(255,255,255,.07);font-size:calc(12 * var(--u))}
+.card .tag{position:absolute;right:calc(14 * var(--u));top:calc(-11 * var(--u));font-family:var(--mono);font-size:calc(10.5 * var(--u));letter-spacing:.06em;text-transform:uppercase;padding:calc(3 * var(--u)) calc(8 * var(--u));border-radius:999px;background:#0b2224;border:1px solid rgba(122,238,214,.3);color:var(--foam)}
+
+.sig{left:calc(40 * var(--ux));top:calc(70 * var(--u));font-family:var(--script);font-size:calc(112 * var(--u));line-height:1;color:var(--foam);padding:0 calc(10 * var(--u));white-space:nowrap;transform:rotate(-17deg);transform-origin:0 50%;
+  text-shadow:0 0 calc(1.5 * var(--u)) #2fdcbc,0 0 calc(7 * var(--u)) var(--glow),0 0 calc(18 * var(--u)) rgba(22,198,164,.55);pointer-events:none}
+
+.statement,.history{left:calc(509 * var(--ux));font-size:calc(55.5 * var(--u));line-height:calc(61 * var(--u));letter-spacing:-.005em;font-weight:400}
+.statement{top:calc(166 * var(--u))}
+.history{top:calc(453 * var(--u));color:var(--grey);font-size:calc(40 * var(--u));line-height:calc(50 * var(--u))}
+.statement>span,.history>span{display:block;white-space:nowrap}
+.history a{color:var(--ink);background:linear-gradient(currentColor,currentColor) left calc(100% - 2 * var(--u)) / 100% calc(3 * var(--u)) no-repeat;
+  transition:background-size .45s cubic-bezier(.2,.7,.2,1),color .3s}
+.history a:hover{background-size:0 calc(3 * var(--u));background-position:right calc(100% - 2 * var(--u));color:#b8f4e6}
+.history .num{color:var(--ink);font-variant-numeric:tabular-nums}
+
+/* ---------- how it works ---------- */
+.how .frame{display:block}
+.how h2{left:calc(63 * var(--ux));top:calc(150 * var(--u));font-family:var(--wide);font-weight:800;font-stretch:112%;font-size:calc(56 * var(--u));line-height:calc(60 * var(--u));text-transform:uppercase;letter-spacing:-.01em;max-width:calc(820 * var(--ux));text-wrap:balance}
+.steps{left:calc(63 * var(--ux));right:calc(62 * var(--ux));top:calc(360 * var(--u));display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;border-top:1px solid rgba(255,255,255,.12)}
+.step{padding:calc(26 * var(--u)) calc(28 * var(--u)) 0 0;min-width:0}
+.step+.step{padding-left:calc(28 * var(--u));border-left:1px solid rgba(255,255,255,.08)}
+.step .n{font-family:var(--mono);font-size:calc(14 * var(--u));color:var(--foam);letter-spacing:.06em}
+.step h3{font-family:var(--sans);font-weight:500;font-size:calc(26 * var(--u));line-height:1.2;margin:calc(14 * var(--u)) 0 calc(10 * var(--u));letter-spacing:-.01em}
+.step p{font-size:calc(16 * var(--u));line-height:1.55;color:var(--grey);max-width:34ch}
+.step code{font-family:var(--mono);font-size:.92em;color:#d9faf2}
+.end{left:calc(63 * var(--ux));right:calc(62 * var(--ux));bottom:calc(150 * var(--u));display:flex;align-items:center;justify-content:space-between;gap:calc(30 * var(--u));flex-wrap:wrap}
+.end .row{display:flex;align-items:center;gap:calc(18 * var(--u));flex-wrap:wrap}
+.credits{font-family:var(--mono);font-size:max(11px, calc(14 * var(--u)));color:var(--grey);line-height:1.7;text-align:right}
+.credits a{color:var(--ink)}
+.credits a:hover{color:#b8f4e6}
+
+/* no WebGL: static gradients */
+html.no-gl .hero{background:linear-gradient(160deg,#06252c 0%,#0f4a48 55%,#2a8f80 100%)}
+html.no-gl .about,html.no-gl .how{background:var(--page)}
+
+/* ---------- phones ---------- */
+@media (max-width:820px){
+  :root{--n:calc(100vw / 430)}
+  .nav{padding-left:max(calc(18 * var(--n)), env(safe-area-inset-left,0px));padding-right:max(calc(18 * var(--n)), env(safe-area-inset-right,0px));height:calc(52 * var(--n) + env(safe-area-inset-top,0px))}
+  .mark{font-size:calc(14 * var(--n))}
+  .mark small{display:none}
+  .links{gap:calc(14 * var(--n));font-size:calc(12 * var(--n))}
+  .links .opt{display:none}
+  .foot,.grid,.dots{display:none}
+  .screen{height:auto}
+  .frame{position:relative;display:flex;flex-direction:column;padding:calc(76 * var(--n)) max(calc(18 * var(--n)), env(safe-area-inset-right,0px)) 0 max(calc(18 * var(--n)), env(safe-area-inset-left,0px))}
+  .frame>*{position:relative;left:auto!important;right:auto!important;top:auto!important;bottom:auto!important}
+  .hero .frame{min-height:100svh}
+  .lede{font-size:calc(24 * var(--n));line-height:1.18}
+  .m1{font-size:calc(12.5 * var(--n));line-height:1.55;white-space:normal;margin-top:calc(14 * var(--n))}
+  .m2{display:none}
+  .spacer{flex:1 0 calc(300 * var(--n))}
+  h1{font-size:calc(35 * var(--n));line-height:1.02}
+  .cta{margin:calc(22 * var(--n)) 0 calc(40 * var(--n));gap:calc(12 * var(--n))}
+  .btn{padding:calc(14 * var(--n)) calc(22 * var(--n));font-size:calc(16 * var(--n));gap:calc(10 * var(--n))}
+  .soon,.handle{font-size:calc(12 * var(--n))}
+  .about .frame{padding:calc(60 * var(--n)) max(calc(18 * var(--n)), env(safe-area-inset-right,0px)) calc(70 * var(--n)) max(calc(18 * var(--n)), env(safe-area-inset-left,0px))}
+  .card{width:calc(300 * var(--n));min-height:0;margin:calc(56 * var(--n)) 0 0 calc(10 * var(--n));font-size:calc(13 * var(--n));padding:calc(16 * var(--n));border-radius:calc(16 * var(--n))}
+  .card .who,.card .k,.card .f{font-size:calc(11 * var(--n))}
+  .card .av{width:calc(22 * var(--n));height:calc(22 * var(--n))}
+  .card .btns span{font-size:calc(12 * var(--n));padding:calc(7 * var(--n)) 0}
+  .card .tag{font-size:calc(10 * var(--n));right:calc(12 * var(--n));top:calc(-10 * var(--n))}
+  .sig{position:absolute!important;left:calc(4 * var(--n))!important;top:calc(40 * var(--n))!important;font-size:calc(92 * var(--n))}
+  .statement,.history{font-size:calc(29 * var(--n));line-height:1.16}
+  .statement>span,.history>span{display:inline;white-space:normal}
+  .statement>span::after,.history>span::after{content:" "}
+  .statement{margin-top:calc(34 * var(--n))}
+  .history{margin-top:calc(22 * var(--n))}
+  .history a{background-size:100% 2px;background-position:left 100%}
+  .how .frame{display:flex;padding-bottom:calc(60 * var(--n))}
+  .how h2{font-size:calc(30 * var(--n));line-height:1.05;max-width:none}
+  .steps{grid-template-columns:1fr 1fr;margin-top:calc(28 * var(--n));row-gap:calc(26 * var(--n))}
+  .step,.step+.step{padding:calc(18 * var(--n)) calc(12 * var(--n)) 0 0;border-left:0}
+  .step .n{font-size:calc(12 * var(--n))}
+  .step h3{font-size:calc(19 * var(--n))}
+  .step p{font-size:calc(14 * var(--n))}
+  .end{flex-direction:column;align-items:flex-start;margin-top:calc(44 * var(--n))}
+  .credits{text-align:left;font-size:calc(12 * var(--n))}
+}
+@media (max-width:420px){.steps{grid-template-columns:1fr}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<canvas id="gl" aria-hidden="true"></canvas>
+
+<header class="nav">
+  <a class="mark" href="#top" data-scroll>TIDE<small>@usetidebot</small></a>
+  <nav class="links" aria-label="Main">
+    <a class="ul" href="#how" data-scroll>HOW IT WORKS</a>
+    <a class="ul opt" href="https://github.com/not-a-vibe-coder/Tide" target="_blank" rel="noopener">GITHUB</a>
+    <a class="ul" href="https://t.me/usetidebot" target="_blank" rel="noopener">OPEN BOT</a>
+  </nav>
+</header>
+
+<main id="top">
+  <section class="screen hero" aria-label="Intro">
+    <div class="frame">
+      <div class="grid hgrid" aria-hidden="true">
+        <i class="v" style="left:calc(52 * var(--ux))"></i><i class="v" style="left:calc(494 * var(--ux))"></i><i class="v" style="left:calc(946 * var(--ux))"></i><i class="v" style="left:calc(1388 * var(--ux))"></i>
+        <i class="h" style="top:calc(256 * var(--u))"></i><i class="h" style="bottom:calc(320 * var(--u))"></i><i class="h" style="bottom:calc(30 * var(--u))"></i>
+      </div>
+
+      <p class="lede">Momentum &amp;<br>Memory</p>
+      <p class="mono m1">Watching Sui + Solana.
+Sizing every alert.</p>
+      <p class="mono m2">Tide spots tokens the hour they start moving,
+reads the red flags before you ape in,
+remembers why you bought, and gets stricter
+when your calls go bad. Not financial advice.</p>
+
+      <div class="spacer" aria-hidden="true"></div>
+
+      <h1><span><em>A trading friend</em></span><span><em>that remembers</em></span><span><em>every call</em></span></h1>
+
+      <div class="cta">
+        <a class="btn" href="https://t.me/usetidebot" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21.9 4.3 18.7 19.5c-.2 1.1-.9 1.4-1.8.9l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.3-5 9.1-8.2c.4-.4-.1-.6-.6-.2L6.2 13.3l-4.8-1.5c-1-.3-1.1-1 .2-1.5l18.9-7.3c.9-.3 1.6.2 1.4 1.3z"/></svg>
+          Open Tide in Telegram
+        </a>
+        <span class="soon"><b aria-hidden="true"></b>Web version coming soon</span>
+        <span class="handle">t.me/usetidebot · free · read-only, never asks for keys</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="screen about" id="about" aria-label="What Tide does">
+    <div class="frame">
+      <div class="grid agrid" aria-hidden="true">
+        <i class="v" style="left:calc(52 * var(--ux))"></i><i class="v" style="left:calc(499 * var(--ux))"></i><i class="v" style="left:calc(942 * var(--ux))"></i><i class="v" style="left:calc(1387 * var(--ux))"></i>
+        <i class="h" style="top:calc(270 * var(--u))"></i><i class="h" style="top:calc(582 * var(--u))"></i><i class="h" style="bottom:calc(28 * var(--u))"></i>
+      </div>
+      <div class="dots d1" aria-hidden="true"></div>
+      <div class="dots d2" aria-hidden="true"></div>
+
+      <div class="card" role="img" aria-label="Example Tide alert in Telegram for a made-up token">
+        <span class="tag">example alert</span>
+        <div class="who"><span class="av"></span>Tide · bot</div>
+        <div class="bubble">
+          <p class="t">SCOOP just started moving on sui</p>
+          <p>the last hour traded 4.2× its usual volume and price is up 26% in an hour.</p>
+          <p class="k">price $0.0121 · mcap $1.4M · liquidity $86k</p>
+          <p class="flag">risk looks medium: pool 3 days old, more sells than buys in 1h.</p>
+          <p class="size">if you go in, i'd keep it under <b>$4.50</b>. nfa.</p>
+          <p class="f">$30 left this week × 25% × track record 0.8 × risk 0.75</p>
+        </div>
+        <div class="btns" aria-hidden="true"><span>bought</span><span>skipped</span><span>not for me</span></div>
+      </div>
+      <div class="sig" aria-hidden="true">tide</div>
+
+      <p class="statement">
+        <span>I watch the market so you</span>
+        <span>don't have to stare at charts,</span>
+        <span>and I remember every call</span>
+        <span>you make, and why.</span>
+      </p>
+      <p class="history">
+        <span>Replaying history, only <span class="num">31%</span> of Sui and <span class="num">41%</span></span>
+        <span>of Solana signals were up a day later,</span>
+        <span>so I size them down. Memory on <a href="https://www.walrus.xyz" target="_blank" rel="noopener">Walrus</a>,</span>
+        <span>reads via <a href="https://tatum.io" target="_blank" rel="noopener">Tatum</a>, code on <a href="https://github.com/not-a-vibe-coder/Tide" target="_blank" rel="noopener">GitHub</a>.</span>
+      </p>
+    </div>
+  </section>
+
+  <section class="screen how" id="how" aria-label="How it works">
+    <div class="frame">
+      <h2>Four messages and it knows how you trade</h2>
+      <div class="steps">
+        <div class="step"><span class="n">01 · WALLET</span><h3>Paste a wallet</h3><p>Send your Sui or Solana address, or both. Tide only reads public data and never asks for keys or signatures.</p></div>
+        <div class="step"><span class="n">02 · BUDGET</span><h3>Set a weekly budget</h3><p>It proposes one from your cash. Every suggested size comes out of what's left this week, so a hot streak can't run away with you.</p></div>
+        <div class="step"><span class="n">03 · ALERTS</span><h3>Get alerts sized for you</h3><p>Spikes and opt-in fresh launches, each with a risk check, on-chain red flags like live mint authority, and a max size from your own record.</p></div>
+        <div class="step"><span class="n">04 · CHAT</span><h3>Just talk to it</h3><p>Ask <code>why shouldn't i buy $WIF?</code> or <code>top 5 on solana</code>, or say <code>turn on launch alerts</code>. In plain words, pidgin included.</p></div>
+      </div>
+      <div class="end">
+        <div class="row">
+          <a class="btn" href="https://t.me/usetidebot" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21.9 4.3 18.7 19.5c-.2 1.1-.9 1.4-1.8.9l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.3-5 9.1-8.2c.4-.4-.1-.6-.6-.2L6.2 13.3l-4.8-1.5c-1-.3-1.1-1 .2-1.5l18.9-7.3c.9-.3 1.6.2 1.4 1.3z"/></svg>
+            Start on Telegram
+          </a>
+          <span class="soon"><b aria-hidden="true"></b>Web version coming soon</span>
+        </div>
+        <p class="credits">Built for the Walrus × Tatum Total Recall hackathon<br>by <a class="ul" href="https://x.com/jackdotsol" target="_blank" rel="noopener">@jackdotsol</a> · nothing here is financial advice</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot" aria-hidden="true">
+  <span class="clock">GMT+1  00:00</span>
+  <span class="xy">0720 X 0450 Y</span>
+  <svg class="globe" viewBox="0 0 48 28" fill="none" stroke="#fff" stroke-width="1.4">
+    <ellipse cx="24" cy="14" rx="22.5" ry="12.5"/>
+    <ellipse class="mer" cx="24" cy="14" rx="9" ry="12.5"/>
+    <path d="M1.5 14h45M4.5 7.5h39M4.5 20.5h39M24 1.5v25"/>
+  </svg>
+</footer>
+
+<script>
+/* ---------- chrome, entrance, smooth scroll (no WebGL needed) ---------- */
+(() => {
+  const root = document.documentElement;
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  setTimeout(() => root.classList.remove("anim"), 3500);
+
+  // clock: viewer's own offset and local time
+  const clock = document.querySelector(".clock");
+  const tick = () => {
+    const d = new Date(), off = -d.getTimezoneOffset() / 60;
+    const o = Number.isInteger(off) ? off : off.toFixed(1);
+    clock.textContent = `GMT${off >= 0 ? "+" : "−"}${Math.abs(o)}  ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+  tick(); setInterval(tick, 10000);
+
+  const xy = document.querySelector(".xy");
+  addEventListener("pointermove", (e) => {
+    const x = Math.round((e.clientX / innerWidth) * 1440), y = Math.round((e.clientY / innerHeight) * 900);
+    xy.textContent = `${String(x).padStart(4, "0")} X ${String(y).padStart(4, "0")} Y`;
+  }, { passive: true });
+
+  // smooth scroll
+  let lenis = null;
+  if (!reduce && window.Lenis) {
+    lenis = new Lenis({ lerp: 0.1, smoothWheel: true });
+    const raf = (t) => { lenis.raf(t); requestAnimationFrame(raf); };
+    requestAnimationFrame(raf);
+  }
+  document.querySelectorAll("a[data-scroll]").forEach((a) => a.addEventListener("click", (e) => {
+    const id = a.getAttribute("href");
+    const target = id === "#top" ? 0 : document.querySelector(id);
+    if (target === null) return;
+    e.preventDefault();
+    if (lenis) lenis.scrollTo(target);
+    else (id === "#top" ? scrollTo({ top: 0 }) : target.scrollIntoView());
+  }));
+
+  // hero entrance
+  const ease = "cubic-bezier(.16,1,.3,1)";
+  const run = () => {
+    root.classList.remove("anim");
+    if (reduce) return;
+    const a = (el, kf, o) => el && el.animate(kf, { fill: "both", easing: ease, ...o });
+    a(document.querySelector(".hgrid"), [{ opacity: 0 }, { opacity: 1 }], { duration: 900, delay: 300, easing: "linear" });
+    document.querySelectorAll(".nav,.foot").forEach((el) => a(el, [{ opacity: 0, transform: "translateY(-8px)" }, { opacity: 1, transform: "none" }], { duration: 900, delay: 350 }));
+    [".lede", ".m1", ".m2"].forEach((s, i) => a(document.querySelector(s), [{ opacity: 0, transform: "translateY(14px)" }, { opacity: 1, transform: "none" }], { duration: 1000, delay: 500 + 110 * i }));
+    document.querySelectorAll("h1 em").forEach((el, i) => a(el, [{ transform: "translateY(105%)" }, { transform: "none" }], { duration: 1200, delay: 650 + 120 * i }));
+    a(document.querySelector(".cta"), [{ opacity: 0, transform: "translateY(14px)" }, { opacity: 1, transform: "none" }], { duration: 1000, delay: 1000 });
+  };
+  (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(run);
+
+  // about entrance: elements are visible at rest; this only animates them in once
+  if (!reduce && "IntersectionObserver" in window) {
+    const about = document.querySelector(".about");
+    const io = new IntersectionObserver((entries) => {
+      if (!entries[0].isIntersecting) return;
+      io.disconnect();
+      const card = document.querySelector(".card"), sig = document.querySelector(".sig");
+      const settle = (anim, el, end) => anim.finished.then(() => { anim.cancel(); Object.assign(el.style, end); }).catch(() => {});
+      settle(card.animate([{ opacity: 0, clipPath: "inset(100% 0 0 0)", transform: "translateY(20px)" }, { opacity: 1, clipPath: "inset(0 0 0 0)", transform: "none" }], { duration: 1100, easing: ease, fill: "both" }), card, { opacity: 1, clipPath: "none" });
+      const draw = sig.animate([{ clipPath: "inset(-60% 100% -60% -20%)", opacity: 0 }, { opacity: 0.4, offset: 0.6 }, { clipPath: "inset(-60% -20% -60% -20%)", opacity: 1 }], { duration: 1300, delay: 450, easing: "cubic-bezier(.55,.1,.3,1)", fill: "both" });
+      settle(draw, sig, { opacity: 1, clipPath: "none" });
+      sig.animate([{ opacity: 1 }, { opacity: 0.82 }, { opacity: 1 }, { opacity: 0.9 }, { opacity: 1 }], { duration: 4200, delay: 1800, iterations: Infinity });
+      document.querySelectorAll(".statement>span,.history>span").forEach((el, i) =>
+        el.animate([{ opacity: 0, transform: "translateY(22px)" }, { opacity: 1, transform: "none" }], { duration: 1000, delay: 150 + 80 * i, easing: ease, fill: "backwards" }));
+    }, { threshold: 0.4 });
+    io.observe(about);
+  }
+})();
+</script>
+
+<script type="module">
+/* ---------- the tide: one fixed WebGL scene behind the page ---------- */
+import * as THREE from "three";
+
+const root = document.documentElement;
+const canvas = document.getElementById("gl");
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const isPhone = () => innerWidth < 820;
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
+} catch (e) {
+  root.classList.add("no-gl");
+  throw e;
+}
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.LinearSRGBColorSpace; // shaders write display-ready colour themselves
+renderer.toneMapping = THREE.NoToneMapping;
+renderer.setClearColor(0x091618, 1);
+renderer.autoClear = true;
+
+/* ----- pointer, scroll ----- */
+const ptr = { uv: new THREE.Vector2(0.5, 0.5), inside: false, px: new THREE.Vector2(), last: new THREE.Vector2(), delta: new THREE.Vector2(), movedAt: 0 };
+addEventListener("pointermove", (e) => {
+  if (e.pointerType === "touch") return;
+  ptr.uv.set(e.clientX / innerWidth, 1 - e.clientY / innerHeight);
+  ptr.inside = true;
+  const dpr = renderer.getPixelRatio();
+  const nx = e.clientX * dpr, ny = (innerHeight - e.clientY) * dpr;
+  ptr.delta.set(nx - ptr.px.x, ny - ptr.px.y);
+  if (ptr.delta.lengthSq() > 1) ptr.movedAt = performance.now();
+  ptr.px.set(nx, ny);
+}, { passive: true });
+const out = () => { ptr.inside = false; };
+document.addEventListener("pointerleave", out);
+document.addEventListener("mouseleave", out);
+addEventListener("blur", out);
+
+const hero = document.querySelector(".hero");
+function scrollState() {
+  const vh = innerHeight, r = hero.getBoundingClientRect();
+  const p = THREE.MathUtils.clamp((vh - r.bottom) / (vh - 0.25 * vh), 0, 1);
+  return { vh, p, heroVisible: r.bottom > 0, scroll: scrollY, heroTop: r.top + scrollY };
+}
+
+/* ----- sizes and targets ----- */
+const W = () => renderer.domElement.width, H = () => renderer.domElement.height;
+const rtOpts = { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false };
+const bgRT = new THREE.WebGLRenderTarget(4, 4, rtOpts);
+const envRT = new THREE.WebGLRenderTarget(4, 4, { ...rtOpts, depthBuffer: true });
+const sceneRT = new THREE.WebGLRenderTarget(4, 4, { ...rtOpts, depthBuffer: true, samples: isPhone() ? 0 : 4 });
+const fluidA = new THREE.WebGLRenderTarget(4, 4, rtOpts);
+const fluidB = new THREE.WebGLRenderTarget(4, 4, rtOpts);
+let fluidRead = fluidA, fluidWrite = fluidB;
+
+const quadGeo = new THREE.PlaneGeometry(2, 2);
+const orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const screenVert = /* glsl */`varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0., 1.); }`;
+const pass = (frag, uniforms, extra = {}) => new THREE.ShaderMaterial({ vertexShader: screenVert, fragmentShader: frag, uniforms, depthTest: false, depthWrite: false, ...extra });
+
+/* ----- 1. background field: vignette → swirl → sine → shatter → bokeh, rendered small ----- */
+const bgUniforms = { uTime: { value: 0 }, uP: { value: new THREE.Vector2(0.5, 0.5) }, uAspect: { value: 1 } };
+const bgMat = pass(/* glsl */`
+  precision highp float;
+  varying vec2 vUv;
+  uniform float uTime, uAspect; uniform vec2 uP;
+  vec3 lin(vec3 c){ return pow(c, vec3(2.2)); }
+  float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  vec2 hash2(vec2 p){ return vec2(hash(p), hash(p + 17.31)); }
+  mat2 rot(float a){ float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+
+  vec2 warp(vec2 uv){
+    vec2 a = vec2(uAspect, 1.);
+    // swirl around the pointer centre
+    vec2 d = (uv - uP) * a; float r = length(d);
+    vec2 sw = uP + (rot(0.1 * 10. * smoothstep(.25, 0., r) + uTime / 20.) * d) / a;
+    sw = mix(sw, uv, smoothstep(0., .25, r));
+    uv = mix(uv, sw, .5);
+    // sine warp, phase follows the pointer's height
+    vec2 q = uv * 2. - 1.;
+    q.x += sin((q.y + uP.y) * 20. * .35 + .25 * uTime) * 1.18 * .2;
+    uv = q * .5 + .5;
+    // shatter: long diagonal voronoi cells, each nudging its sample
+    vec2 c = rot(-6.2831853 * 45. / 360.) * ((uv - .5) * a * 16.);
+    c.y /= .9;
+    vec2 ci = floor(c), cf = fract(c); float f1 = 9., f2 = 9.; vec2 best = vec2(0.);
+    for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+      vec2 g = vec2(x, y), h = hash2(ci + g);
+      vec2 pt = .5 + .5 * sin(5. + .2 * uTime + 6.2831853 * h);
+      float dd = length(g + pt - cf);
+      if (dd < f1) { f2 = f1; f1 = dd; best = pt; } else if (dd < f2) f2 = dd;
+    }
+    float soft = smoothstep(0., .02, f1) * smoothstep(0., .04, f2 - f1);
+    uv += (best * .4 * .9 - .2 * .9) * soft * .16;
+    return uv;
+  }
+  vec3 field(vec2 uv){
+    vec2 a = vec2(uAspect, 1.), s = vec2(.54, .46);
+    float h = .354 / 2.;
+    float d = distance(uv * a * s, uP * a * s);
+    float f = smoothstep(h - .5 * h, h + .5 * h, d);
+    f = mix(f, 1., .62);
+    return mix(lin(vec3(.525, .918, .839)), lin(vec3(.024, .145, .173)), f);
+  }
+  void main(){
+    vec2 a = vec2(uAspect, 1.);
+    vec2 base = warp(vUv);
+    float dc = distance(vUv * a, uP * a);
+    float radius = 3.125 * .754 * mix(1. - dc, dc, .5) * .006;
+    vec3 acc = vec3(0.); float wsum = 0.; float rr = 1.; float ang = hash(gl_FragCoord.xy) * 6.28;
+    for (int i = 0; i < 16; i++) {
+      ang += 2.39996; rr += 1. / rr;
+      vec2 o = vec2(cos(ang), sin(ang)) * (rr - 1.) * radius * vec2(1. / uAspect, 1.);
+      vec3 c = field(base + o);
+      float l = dot(c, vec3(.333));
+      float w = 5. + pow(l, 9.) * 150.;
+      acc += c * w; wsum += w;
+    }
+    vec3 stack = acc / wsum;
+    vec3 bg = lin(vec3(.525, .918, .839));
+    vec3 ov = vec3(bg.r < .5 ? 2. * bg.r : 1., bg.g < .5 ? 2. * bg.g : 1., bg.b < .5 ? 2. * bg.b : 1.);
+    vec3 b = mix(bg, ov, .61);
+    vec3 blend = clamp(stack + lin(vec3(.059, .42, .4)) * .35, 0., 1.);
+    vec3 col = b * mix(vec3(1.), blend, .95);
+    gl_FragColor = vec4(pow(col, vec3(1. / 2.2)), 1.);
+  }`, bgUniforms);
+const bgScene = new THREE.Scene();
+bgScene.add(new THREE.Mesh(quadGeo, bgMat));
+
+/* ----- main scene: background quad, glass, dot dissolve ----- */
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 200);
+camera.layers.enable(10);
+
+const bgQuad = new THREE.Mesh(quadGeo, pass(`varying vec2 vUv; uniform sampler2D tBg; void main(){ gl_FragColor = vec4(texture2D(tBg, vUv).rgb, 1.); }`, { tBg: { value: bgRT.texture } }));
+bgQuad.renderOrder = -10; bgQuad.frustumCulled = false;
+scene.add(bgQuad);
+
+const dotUniforms = { uP: { value: 0 }, uCell: { value: 4 }, uTrail: { value: [] } };
+const dotMat = pass(/* glsl */`
+  precision highp float;
+  uniform float uP, uCell;
+  void main(){
+    vec2 c = fract(gl_FragCoord.xy / uCell) - .5;
+    float d = length(c), r = .9 * uP;
+    float fw = fwidth(d);
+    float a = uP >= .999 ? 1. : 1. - smoothstep(r - fw, r + fw, d);
+    gl_FragColor = vec4(vec3(.0353, .0863, .0941), a * step(.001, uP));
+  }`, dotUniforms, { transparent: true });
+const dotQuad = new THREE.Mesh(quadGeo, dotMat);
+dotQuad.renderOrder = 10; dotQuad.frustumCulled = false;
+scene.add(dotQuad);
+
+/* ----- glass ----- */
+const lightAngle = { cur: Math.atan2(9, 4), rest: Math.atan2(9, 4) };
+const glassUniforms = () => ({
+  tEnv: { value: envRT.texture }, uRes: { value: new THREE.Vector2(1, 1) }, uLight: { value: new THREE.Vector3(4, 9, .5) },
+  uTintA: { value: new THREE.Color() }, uTintB: { value: new THREE.Color() }, uYRange: { value: new THREE.Vector2(-1, 1) },
+  uLoop: { value: isPhone() ? 2 : 3 }, uTime: { value: 0 },
+});
+const glassVert = /* glsl */`
+  varying vec3 vN; varying vec3 vV; varying float vY;
+  uniform vec2 uYRange;
+  void main(){
+    vec4 mv = modelViewMatrix * vec4(position, 1.);
+    vN = normalize(normalMatrix * normal);
+    vV = mv.xyz;
+    vY = clamp((position.y - uYRange.x) / max(uYRange.y - uYRange.x, 1e-4), 0., 1.);
+    gl_Position = projectionMatrix * mv;
+  }`;
+const glassFrag = /* glsl */`
+  precision highp float;
+  varying vec3 vN; varying vec3 vV; varying float vY;
+  uniform sampler2D tEnv; uniform vec2 uRes; uniform vec3 uLight, uTintA, uTintB; uniform int uLoop; uniform float uTime;
+  float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+  vec3 sat(vec3 c, float s){ float l = dot(c, vec3(.299, .587, .114)); return mix(vec3(l), c, s); }
+  vec3 hardLight(vec3 b, vec3 t){ return mix(2. * b * t, 1. - 2. * (1. - b) * (1. - t), step(.5, t)); }
+  void main(){
+    vec3 n = normalize(vN); if (!gl_FrontFacing) n = -n;
+    vec3 e = normalize(-vV);
+    vec2 suv = gl_FragCoord.xy / uRes;
+    float nz = hash(gl_FragCoord.xy + uTime);
+    vec3 col = vec3(0.);
+    vec3 iors = vec3(1.15, 1.18, 1.22);
+    for (int ch = 0; ch < 3; ch++) {
+      vec3 r = refract(-e, n, 1. / iors[ch]);
+      float acc = 0.;
+      for (int i = 0; i < 3; i++) {
+        if (i >= uLoop) break;
+        float k = (.72 + float(i) / float(uLoop) * .1 + nz * .025) * .14;
+        acc += texture2D(tEnv, suv + r.xy * k)[ch];
+      }
+      col[ch] = acc / float(uLoop);
+    }
+    col = sat(col, 1.2) * .6;
+    col = (col - .5) * .98 + .5;
+    float facing = 1. - abs(dot(n, e));
+    vec3 tint = mix(uTintB, uTintA, vY);
+    col = mix(col, hardLight(col, tint), mix(.4, 1., facing));
+    vec3 L = normalize(uLight);
+    vec3 hv = normalize(L + e);
+    float spec = pow(max(dot(n, hv), 0.), 100.) + .05 * max(dot(n, L), 0.);
+    col += spec * 1.2;
+    float fres = pow(facing, 3.) * .72 * smoothstep(-.5, .5, dot(n, normalize(vec3(-1., 1., -1.))));
+    col += fres;
+    gl_FragColor = vec4(clamp(col, 0., 1.), 1.);
+  }`;
+function glass(tintA, tintB, geo) {
+  geo.computeBoundingBox();
+  const u = glassUniforms();
+  u.uTintA.value.set(tintA); u.uTintB.value.set(tintB);
+  u.uYRange.value.set(geo.boundingBox.min.y, geo.boundingBox.max.y);
+  const m = new THREE.Mesh(geo, new THREE.ShaderMaterial({ vertexShader: glassVert, fragmentShader: glassFrag, uniforms: u, side: THREE.DoubleSide }));
+  m.layers.set(10);
+  return m;
+}
+
+/* "tide" as one monoline cursive stroke, plus the t crossbar and the i dot */
+function tideWord() {
+  const up = .25, dn = -.35;
+  const P = (x, y, z = 0) => new THREE.Vector3(x, y, z);
+  const pts = [
+    P(-1.0, .55, up), P(-.55, .9, up), P(0, 1.9, up), P(.35, 3.0, up), P(.55, 3.9, up),          // lead-in, t up-stroke
+    P(.5, 3.2, dn), P(.4, 2.0, dn), P(.35, .9, dn), P(.5, .25, dn), P(.95, .05, dn),             // t down-stroke and foot
+    P(1.4, .45, up), P(1.75, 1.2, up), P(1.95, 1.9, up),                                          // into i
+    P(1.85, 1.1, dn), P(1.85, .4, dn), P(2.15, .05, dn), P(2.7, .3, dn),                           // i down, curl out
+    P(3.3, 1.2, up), P(3.75, 1.75, up), P(3.5, 2.0, up), P(3.05, 1.95, up), P(2.7, 1.55, dn),     // d bowl top
+    P(2.6, .9, dn), P(2.8, .25, dn), P(3.25, .1, dn), P(3.7, .5, up), P(3.95, 1.4, up),           // bowl bottom, up to stem
+    P(4.15, 2.6, up), P(4.3, 3.7, up), P(4.35, 4.3, up),                                          // d ascender
+    P(4.2, 3.4, dn), P(4.05, 2.1, dn), P(3.98, .9, dn), P(4.15, .25, dn), P(4.6, .05, dn),        // d stem down
+    P(5.05, .5, up), P(5.6, 1.1, up), P(5.85, 1.6, up), P(5.6, 1.95, up), P(5.1, 1.75, up),       // e loop
+    P(4.85, 1.15, dn), P(4.95, .45, dn), P(5.45, .05, dn), P(6.15, .2, dn), P(6.8, .65, up),      // e bottom, rising tail
+  ];
+  const curve = new THREE.CatmullRomCurve3(pts, false, "centripetal");
+  const R = .4;
+  const parts = [new THREE.TubeGeometry(curve, isPhone() ? 700 : 1400, R, isPhone() ? 18 : 28, false)];
+  const cap = (p) => { const s = new THREE.SphereGeometry(R, 24, 16); s.translate(p.x, p.y, p.z); return s; };
+  parts.push(cap(pts[0]), cap(pts[pts.length - 1]));
+  // t crossbar
+  const bar = new THREE.CatmullRomCurve3([P(-.25, 2.65, .45), P(.5, 2.78, .5), P(1.3, 2.95, .45)], false, "centripetal");
+  parts.push(new THREE.TubeGeometry(bar, 60, R * .82, 20, false), cap(P(-.25, 2.65, .45)), cap(P(1.3, 2.95, .45)));
+  parts[parts.length - 1].scale; // keep caps same size as bar ends
+  // i dot
+  const dot = new THREE.SphereGeometry(R * 1.15, 28, 20); dot.translate(2.05, 3.0, .3); parts.push(dot);
+  const merged = mergeAll(parts);
+  merged.scale(1, .86, 1);
+  merged.computeVertexNormals();
+  merged.center();
+  return merged;
+}
+function mergeAll(geos) {
+  // small merge so no addon import is needed: all parts are non-indexed after toNonIndexed()
+  const flat = geos.map((g) => (g.index ? g.toNonIndexed() : g));
+  let count = 0; flat.forEach((g) => (count += g.attributes.position.count));
+  const pos = new Float32Array(count * 3), nor = new Float32Array(count * 3);
+  let o = 0;
+  for (const g of flat) { pos.set(g.attributes.position.array, o * 3); nor.set(g.attributes.normal.array, o * 3); o += g.attributes.position.count; }
+  const m = new THREE.BufferGeometry();
+  m.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  m.setAttribute("normal", new THREE.BufferAttribute(nor, 3));
+  return m;
+}
+function sparkleGeo() {
+  const s = new THREE.Shape(), c = .16;
+  s.moveTo(0, 1); s.quadraticCurveTo(c, c, 1, 0); s.quadraticCurveTo(c, -c, 0, -1); s.quadraticCurveTo(-c, -c, -1, 0); s.quadraticCurveTo(-c, c, 0, 1);
+  const g = new THREE.ExtrudeGeometry(s, { depth: .12, bevelEnabled: true, bevelThickness: .16, bevelSize: .1, bevelSegments: 8, curveSegments: 24 });
+  g.center(); return g;
+}
+function coinGeo() {
+  // a token: bevelled disc with a raised rim
+  const s = new THREE.Shape(); s.absarc(0, 0, 1, 0, Math.PI * 2, false);
+  const hole = new THREE.Path(); hole.absarc(0, 0, .62, 0, Math.PI * 2, true); s.holes.push(hole);
+  const rim = new THREE.ExtrudeGeometry(s, { depth: .22, bevelEnabled: true, bevelThickness: .12, bevelSize: .08, bevelSegments: 6, curveSegments: 48 });
+  const face = new THREE.CylinderGeometry(.64, .64, .16, 48); face.rotateX(Math.PI / 2); face.translate(0, 0, .11);
+  const g = mergeAll([rim, face]); g.computeBoundingBox(); g.center(); return g;
+}
+
+const deg = THREE.MathUtils.degToRad;
+const objs = [];
+function addObj(o) { o.mesh.visible = false; scene.add(o.mesh); objs.push(o); o.mesh.rotation.copy(o.before); return o; }
+function buildObjects() {
+  const phone = isPhone();
+  const word = tideWord();
+  word.computeBoundingBox();
+  const wWidth = word.boundingBox.max.x - word.boundingBox.min.x;
+  const s = (11.5 / wWidth) * (phone ? 19 / 22 : 1);
+  addObj({ mesh: glass("#effffb", "#9fe8d8", word), scale: s, pos: phone ? [0, .4, 2] : [-.1, .7, 2], before: new THREE.Euler(0, deg(240), 0), rest: new THREE.Euler(0, deg(4), 0), after: new THREE.Euler(0, deg(90), 0), word: true });
+  addObj({ mesh: glass("#ffffff", "#d4e2e0", sparkleGeo()), scale: phone ? .62 : .82, pos: phone ? [-4.6, 3.9, 1] : [-6.9, 3.9, 1], before: new THREE.Euler(0, deg(-180), deg(8)), rest: new THREE.Euler(0, deg(-14), deg(8)), after: new THREE.Euler(0, deg(360), 0) });
+  const pill = new THREE.CapsuleGeometry(.5, 1.3, 16, 32); pill.rotateZ(deg(110));
+  addObj({ mesh: glass("#c8f6ea", "#38c4a4", pill), scale: phone ? .75 : 1, pos: phone ? [4.7, 3.7, 0] : [6.3, 3.35, 0], before: new THREE.Euler(0, 0, deg(-90)), rest: new THREE.Euler(0, 0, 0), after: new THREE.Euler(0, 0, deg(180)) });
+  addObj({ mesh: glass("#f6fffd", "#d4f6ee", new THREE.SphereGeometry(.76, 64, 48)), scale: phone ? .75 : 1, pos: phone ? [5.2, -2.8, .5] : [9.7, -.1, .5], before: new THREE.Euler(), rest: new THREE.Euler(), after: new THREE.Euler() });
+  addObj({ mesh: glass("#e4fbf5", "#6fd8c0", coinGeo()), scale: phone ? .62 : .78, pos: phone ? [3.6, -5.2, -1] : [8.9, -2.95, -1], before: new THREE.Euler(deg(70), deg(-200), deg(20)), rest: new THREE.Euler(deg(18), deg(-28), deg(8)), after: new THREE.Euler(deg(18), deg(692), deg(8)) });
+  objs.forEach((o) => { o.mesh.scale.setScalar(o.scale); o.mesh.position.set(...o.pos); });
+}
+buildObjects();
+
+/* ----- pointer fluid: a decaying velocity field that bends the finished frame ----- */
+const fluidUniforms = { tVel: { value: null }, uPtr: { value: new THREE.Vector2() }, uDelta: { value: new THREE.Vector2() }, uAspect: { value: 1 }, uActive: { value: 0 }, uTexel: { value: new THREE.Vector2() } };
+const fluidMat = pass(/* glsl */`
+  precision highp float; varying vec2 vUv;
+  uniform sampler2D tVel; uniform vec2 uPtr, uDelta, uTexel; uniform float uAspect, uActive;
+  void main(){
+    vec2 v = texture2D(tVel, vUv).xy;
+    vec2 back = vUv - v * uTexel * .016 * 60.;
+    vec2 adv = texture2D(tVel, back).xy / (1. + 3. * .016);
+    vec2 d = (vUv - uPtr) * vec2(uAspect, 1.);
+    vec2 splat = uDelta * exp(-dot(d, d) / .003) * 30. * uActive;
+    gl_FragColor = vec4(clamp(adv + splat, -1000., 1000.), 0., 1.);
+  }`, fluidUniforms);
+const fluidScene = new THREE.Scene(); fluidScene.add(new THREE.Mesh(quadGeo, fluidMat));
+
+const displayUniforms = { tScene: { value: sceneRT.texture }, tVel: { value: null }, uGrid: { value: new THREE.Vector2(160, 160) }, uOn: { value: 0 } };
+const displayMat = pass(/* glsl */`
+  precision highp float; varying vec2 vUv;
+  uniform sampler2D tScene, tVel; uniform vec2 uGrid; uniform float uOn;
+  vec3 ramp(float t){
+    vec3 a = vec3(.62, 1., .9), b = vec3(.25, .95, .62), c = vec3(.04, .62, .55);
+    return t < .5 ? mix(a, b, t * 2.) : mix(b, c, t * 2. - 1.);
+  }
+  void main(){
+    vec2 disp = uOn > .5 ? texture2D(tVel, vUv).xy / uGrid : vec2(0.);
+    float m = length(disp);
+    if (m < 1e-4) { gl_FragColor = vec4(texture2D(tScene, vUv).rgb, 1.); return; }
+    vec3 col = vec3(0.), wsum = vec3(0.);
+    for (int i = 0; i < 4; i++) {
+      float k = float(i) / 3.;
+      vec3 w = vec3(.55 + .45 * (1. - abs(2. * k - 1.)), 1. - .2 * k, .75 + .25 * k);
+      col += texture2D(tScene, vUv - disp * .3 * (k + .3) * min(m * 40., 1.) * 3.).rgb * w;
+      wsum += w;
+    }
+    col /= wsum;
+    col += ramp(sin(2. * m * 40.) * .5 + .5) * smoothstep(.2, .8, m * 40.) * .25;
+    gl_FragColor = vec4(col, 1.);
+  }`, displayUniforms);
+const displayScene = new THREE.Scene(); displayScene.add(new THREE.Mesh(quadGeo, displayMat));
+
+/* ----- resize ----- */
+let hfov = 60;
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  const dw = W(), dh = H();
+  hfov = w >= 1024 ? 60 : 38;
+  camera.aspect = w / h;
+  camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(deg(hfov) / 2) / camera.aspect));
+  camera.updateProjectionMatrix();
+  bgRT.setSize(Math.max(2, Math.round(w * .3)), Math.max(2, Math.round(h * .3)));
+  envRT.setSize(Math.max(2, dw >> 1), Math.max(2, dh >> 1));
+  sceneRT.setSize(dw, dh);
+  const gy = 160, gx = Math.round(160 * Math.max(w / h, 1)), gyy = Math.round(160 * Math.max(h / w, 1));
+  fluidA.setSize(gx, gyy); fluidB.setSize(gx, gyy);
+  displayUniforms.uGrid.value.set(gx, gyy);
+  fluidUniforms.uTexel.value.set(1 / gx, 1 / gyy);
+  bgUniforms.uAspect.value = w / h;
+  fluidUniforms.uAspect.value = w / h;
+  dotUniforms.uCell.value = 4 * renderer.getPixelRatio();
+  objs.forEach((o) => o.mesh.material.uniforms.uRes.value.set(dw, dh));
+}
+addEventListener("resize", resize);
+resize();
+
+/* ----- motion helpers ----- */
+function bezier(x1, y1, x2, y2) {
+  const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx, cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
+  const sx = (t) => ((ax * t + bx) * t + cx) * t, sy = (t) => ((ay * t + by) * t + cy) * t, dx = (t) => (3 * ax * t + 2 * bx) * t + cx;
+  return (x) => { let t = x; for (let i = 0; i < 6; i++) { const d = dx(t); if (Math.abs(d) < 1e-6) break; t -= (sx(t) - x) / d; } return sy(Math.min(1, Math.max(0, t))); };
+}
+const dolly = bezier(.66, 0, .01, 1);
+const damp = (a, b, l, dt) => THREE.MathUtils.lerp(a, b, 1 - Math.exp(-l * dt));
+const lerpE = (a, b, t, out) => out.set(THREE.MathUtils.lerp(a.x, b.x, t), THREE.MathUtils.lerp(a.y, b.y, t), THREE.MathUtils.lerp(a.z, b.z, t));
+const tmpE = new THREE.Euler(), target = new THREE.Euler();
+const ray = new THREE.Raycaster(), plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), hit = new THREE.Vector3();
+const cam = { off: new THREE.Vector2(), look: new THREE.Vector2() };
+
+/* ----- loop ----- */
+const clock = new THREE.Clock();
+let frame = 0, introStart = -1, solid = false, lastP = -1;
+function render() {
+  requestAnimationFrame(render);
+  const dt = Math.min(clock.getDelta(), 1 / 20), t = clock.elapsedTime;
+  const phone = isPhone();
+  const s = scrollState();
+  frame++;
+
+  // pointer centre for the field
+  const P = bgUniforms.uP.value;
+  if (phone) P.set(.5, -.1);
+  else if (ptr.inside) P.lerp(ptr.uv, .1);
+  else P.lerp(new THREE.Vector2(.5, .5), .05);
+  bgUniforms.uTime.value = t;
+
+  const fluidLive = !phone && !reduce && !solid && performance.now() - ptr.movedAt < 600;
+  if (s.p >= .9) solid = true; else if (s.p <= .82) solid = false;
+  const idle = s.p >= 1 && !s.heroVisible && !fluidLive && lastP === 1 && frame > 10;
+  lastP = s.p;
+  if (idle) return;
+
+  // 1. background (small, every 2nd frame, every 4th late in the dissolve)
+  const every = s.p > .75 ? 4 : 2;
+  if (s.p < .98 && (frame % every === 0 || frame < 3)) { renderer.setRenderTarget(bgRT); renderer.render(bgScene, orthoCam); }
+
+  // 2. objects
+  if (introStart < 0 && frame > 5) { introStart = t; canvas.classList.add("on"); objs.forEach((o) => (o.mesh.visible = true)); }
+  const intro = reduce ? 1 : introStart < 0 ? 0 : Math.min(1, (t - introStart) / 1.2);
+  const base = THREE.MathUtils.lerp(24, 32, s.p);
+  camera.position.z = THREE.MathUtils.lerp(base + 8, base, dolly(intro));
+
+  if (!phone && !reduce) {
+    const tx = ptr.inside ? (.5 - ptr.uv.x) * 2 * 1.4 : 0, ty = ptr.inside ? (.5 - ptr.uv.y) * 2 * 1.4 * .6 : 0;
+    const k = ptr.inside ? .18 : .05;
+    cam.off.x += (tx - cam.off.x) * k; cam.off.y += (ty - cam.off.y) * k;
+  } else { cam.off.multiplyScalar(.9); }
+  camera.position.x = cam.off.x; camera.position.y = cam.off.y;
+  camera.lookAt(-.12 * cam.off.x, -.12 * cam.off.y, 0);
+
+  const entry = THREE.MathUtils.clamp((s.scroll + s.vh - s.heroTop) / s.vh, 0, 1);
+  const after = THREE.MathUtils.clamp((s.scroll + s.vh - s.heroTop) / s.vh - 1, 0, 1);
+  const vfov = deg(camera.fov);
+  for (const o of objs) {
+    lerpE(o.before, o.rest, entry, target);
+    lerpE(target, o.after, after, tmpE);
+    if (reduce) o.mesh.rotation.copy(tmpE);
+    else { const r = o.mesh.rotation; r.x = damp(r.x, tmpE.x, 6, dt); r.y = damp(r.y, tmpE.y, 6, dt); r.z = damp(r.z, tmpE.z, 6, dt); }
+    const Hz = 2 * Math.tan(vfov / 2) * (camera.position.z - o.pos[2]);
+    let y = o.pos[1] + (s.scroll / s.vh) * Hz * .72;
+    if (!phone && !reduce) y += .18 * Math.sin(1.2 * t + o.pos[0]) + .06 * Math.sin(.6 * t);
+    o.mesh.position.set(o.pos[0], y, o.pos[2]);
+    o.mesh.visible = introStart >= 0 && s.heroVisible;
+  }
+
+  // light orbit, swinging opposite the pointer
+  let goal = lightAngle.rest;
+  if (!phone && ptr.inside) {
+    ray.setFromCamera(new THREE.Vector2(ptr.uv.x * 2 - 1, ptr.uv.y * 2 - 1), camera);
+    if (ray.ray.intersectPlane(plane, hit)) goal = Math.atan2(-hit.y, -hit.x);
+  }
+  let diff = ((goal - lightAngle.cur + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+  lightAngle.cur += diff * (1 - Math.exp(-6 * dt));
+  const lr = Math.hypot(4, 9);
+  for (const o of objs) { const u = o.mesh.material.uniforms; u.uLight.value.set(Math.cos(lightAngle.cur) * lr, Math.sin(lightAngle.cur) * lr, .5); u.uTime.value = t; }
+
+  dotUniforms.uP.value = s.p;
+
+  // 3. environment for the glass: everything except the glass, half size
+  const envEvery = phone ? 3 : s.p > .75 ? 4 : s.p > .5 ? 2 : 1;
+  if (s.heroVisible && s.p < .99 && frame % envEvery === 0) {
+    camera.layers.set(0);
+    renderer.setRenderTarget(envRT); renderer.render(scene, camera);
+    camera.layers.enable(10);
+  }
+
+  // 4. full scene
+  renderer.setRenderTarget(sceneRT); renderer.render(scene, camera);
+
+  // 5. fluid
+  if (fluidLive) {
+    const dw = W(), dh = H();
+    fluidUniforms.tVel.value = fluidRead.texture;
+    fluidUniforms.uPtr.value.set(ptr.px.x / dw, ptr.px.y / dh);
+    fluidUniforms.uDelta.value.set(ptr.delta.x / dw * 160, ptr.delta.y / dh * 160);
+    fluidUniforms.uActive.value = 1;
+    renderer.setRenderTarget(fluidWrite); renderer.render(fluidScene, orthoCam);
+    [fluidRead, fluidWrite] = [fluidWrite, fluidRead];
+    ptr.delta.multiplyScalar(.9);
+  }
+  displayUniforms.tVel.value = fluidRead.texture;
+  displayUniforms.uOn.value = fluidLive ? 1 : 0;
+  renderer.setRenderTarget(null); renderer.render(displayScene, orthoCam);
+}
+render();
+</script>
+</body>
+</html>
