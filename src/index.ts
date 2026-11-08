@@ -41,6 +41,7 @@ async function main() {
     };
   }
   const tide = new Tide(store, memory, readers, market, rules);
+  tide.alertGapMs = cfg.ALERT_GAP_MINUTES * 60_000;
   log.info(`chains: ${tide.chains.join(", ")}`);
 
   log.info("Walrus Memory:", await memory.health().catch((e) => `unreachable (${e.message})`));
@@ -107,8 +108,18 @@ async function main() {
     log.info(`backfill: ${summary.map((s) => `${s.chain} ${s.pools} pools → ${s.outcomes} outcomes (${s.up} up)`).join(", ")}`);
   });
   cron.schedule("17 4 * * *", backfill, tz);
-  const shared = store.outcomeSources();
-  if (shared.history + shared.live < 20) setTimeout(backfill, 60_000);
+  // Render's free plan wipes the disk on every deploy: pull users back from Walrus first,
+  // then backfill history only if shared memory is still thin.
+  void (async () => {
+    try {
+      const restored = await tide.restore(cfg.ADMIN_TELEGRAM_IDS);
+      if (restored) log.info(`restored ${restored} users from Walrus Memory`);
+    } catch (err) {
+      log.warn("restore from Walrus failed:", err instanceof Error ? err.message : err);
+    }
+    const shared = store.outcomeSources();
+    if (shared.history + shared.live < 20) setTimeout(backfill, 60_000);
+  })();
 
   let runner: RunnerHandle | undefined;
   const stop = async () => {

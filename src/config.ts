@@ -48,6 +48,8 @@ const schema = z.object({
   DATABASE_PATH: z.string().default("./data/tide.db"),
 
   SCAN_INTERVAL_MINUTES: z.coerce.number().int().positive().default(5),
+  /** One alert per chain per person at most this often. */
+  ALERT_GAP_MINUTES: z.coerce.number().int().positive().default(45),
   WALLET_CHECK_INTERVAL_MINUTES: z.coerce.number().int().positive().default(30),
   MIN_LIQUIDITY_USD: z.coerce.number().nonnegative().default(10_000),
   MIN_HOURLY_VOLUME_USD: z.coerce.number().nonnegative().default(5_000),

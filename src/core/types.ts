@@ -24,8 +24,11 @@ export interface Pool {
 export type TokenClass = "new" | "established";
 
 export interface Spike {
-  /** "spike" = an existing pool suddenly moving; "launch" = a pool created minutes ago. */
-  kind?: "spike" | "launch";
+  /**
+   * "spike" = an existing pool suddenly moving; "launch" = a pool created minutes ago;
+   * "mover" = the strongest steady climber when nothing spiked or launched this round.
+   */
+  kind?: "spike" | "launch" | "mover";
   pool: Pool;
   tokenClass: TokenClass;
   /** Last-hour volume divided by the average hourly volume over 24h. */

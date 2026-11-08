@@ -155,6 +155,25 @@ export interface LaunchRules {
   minBuysH1: number;
 }
 
+/**
+ * A steady mover: not a full spike, but climbing with real money behind it
+ * (price up 5%+ in the hour, at least half the spike volume floor, more buys
+ * than sells). Used so each round still surfaces the best thing on a chain.
+ */
+export function detectMover(pool: Pool, rules: SpikeRules = DEFAULT_SPIKE_RULES, now = new Date()): Spike | null {
+  if (pool.liquidityUsd < rules.minLiquidityUsd) return null;
+  if (pool.volumeUsd.h1 < rules.minHourlyVolumeUsd / 2) return null;
+  if (pool.priceChangePct.h1 < 5) return null;
+  if (pool.txH1.buys <= pool.txH1.sells) return null;
+  const avgHour = pool.volumeUsd.h24 / 24;
+  const volumeMultiple = avgHour > 0 ? pool.volumeUsd.h1 / avgHour : 0;
+  const reasons = [
+    `price is up ${pool.priceChangePct.h1.toFixed(0)}% in the last hour`,
+    `${money(pool.volumeUsd.h1)} traded with ${pool.txH1.buys} buys to ${pool.txH1.sells} sells`,
+  ];
+  return { kind: "mover", pool, tokenClass: classifyToken(pool, now), volumeMultiple, reasons };
+}
+
 export const DEFAULT_LAUNCH_RULES: LaunchRules = { maxAgeMinutes: 60, minLiquidityUsd: 5_000, minBuysH1: 10 };
 
 /**

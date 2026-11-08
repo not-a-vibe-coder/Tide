@@ -33,7 +33,9 @@ export function alertMessage(spike: Spike, risk: RiskCheck, sizing: SizingResult
   const lines = [
     spike.kind === "launch"
       ? `fresh launch on ${CHAIN_LABEL[p.chain]}: <b>${esc(p.baseSymbol)}</b>`
-      : `<b>${esc(p.baseSymbol)}</b> just started moving on ${CHAIN_LABEL[p.chain]}`,
+      : spike.kind === "mover"
+        ? `<b>${esc(p.baseSymbol)}</b> is the strongest mover on ${CHAIN_LABEL[p.chain]} right now`
+        : `<b>${esc(p.baseSymbol)}</b> just started moving on ${CHAIN_LABEL[p.chain]}`,
     `${esc(sentence(spike.reasons))}.`,
     "",
     `price ${usd(p.priceUsd)} · mcap ${usd(p.marketCapUsd ?? p.fdvUsd)} · liquidity ${usd(p.liquidityUsd)}`,
@@ -41,6 +43,7 @@ export function alertMessage(spike: Spike, risk: RiskCheck, sizing: SizingResult
     "",
     riskLine,
   ];
+  if (spike.kind === "mover") lines.push("quieter than a real spike, it's just the best climber i found this round.");
   if (spike.kind === "launch") lines.push("brand-new launches are the riskiest thing i send. most of them go to zero, so size like you'll lose it.");
   if (sharedNote) lines.push(esc(sharedNote));
   lines.push("");

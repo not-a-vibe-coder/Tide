@@ -89,20 +89,19 @@ describe("Tide end to end", () => {
     await tide.setWallet(USER, "0x" + "1".repeat(64));
     tide.setBudget(USER, 40);
 
-    // Six alerts across three scans (two per chain per scan), all established pools with full liquidity (r = 1).
+    // Six alerts, one per hourly scan (one per chain every 45 minutes), all established pools with full liquidity (r = 1).
     market.pools = [1, 2, 3].map((i) => spikePool(i));
-    expect(await tide.scan()).toBe(2);
+    expect(await tide.scan()).toBe(1);
     const firstAlert = sent.at(-1)!.html;
     expect(firstAlert).toContain("keep it under <b>$10</b>"); // 40 × 25% × 1 × 1
     expect(firstAlert).toContain("moving on sui");
+    expect(await tide.scan()).toBe(0); // too soon for another sui alert
 
-    vi.setSystemTime(new Date("2026-11-04T14:00:00Z"));
-    market.pools = [3, 4].map((i) => spikePool(i));
-    expect(await tide.scan()).toBe(2);
-
-    vi.setSystemTime(new Date("2026-11-04T17:00:00Z"));
-    market.pools = [5, 6].map((i) => spikePool(i));
-    expect(await tide.scan()).toBe(2);
+    for (let i = 2; i <= 6; i++) {
+      vi.setSystemTime(new Date(Date.parse("2026-11-04T10:00:00Z") + (i - 1) * 3_600_000));
+      market.pools = [spikePool(i)];
+      expect(await tide.scan()).toBe(1);
+    }
 
     // A day later every token is down 40%.
     vi.setSystemTime(new Date("2026-11-05T18:00:00Z"));
@@ -111,6 +110,7 @@ describe("Tide end to end", () => {
     expect(store.outcomes(USER, "established")).toEqual(Array(6).fill(false));
 
     // Next alert of the same class is sized down by the track record (h = 0.5).
+    vi.setSystemTime(new Date("2026-11-05T19:00:00Z"));
     market.pools = [spikePool(7)];
     expect(await tide.scan()).toBe(1);
     const later = sent.at(-1)!.html;
@@ -121,6 +121,7 @@ describe("Tide end to end", () => {
     // "Not for me" mutes the class.
     const alertId = sent.at(-1)!.buttons![0]![2]!.data.split(":")[2]!;
     tide.handleAlertAction(USER, alertId, "not_for_me");
+    vi.setSystemTime(new Date("2026-11-05T20:00:00Z"));
     market.pools = [spikePool(8)];
     expect(await tide.scan()).toBe(0);
 
@@ -137,6 +138,21 @@ describe("Tide end to end", () => {
     // Report differs only in the Walrus write counters, which live outside the replayed tables.
     const stripCounts = (s: string) => s.replace(/\d+ stored.*$/m, "");
     expect(stripCounts(tide.memoryReport(USER))).toBe(stripCounts(before));
+  });
+
+  it("brings every user back after a deploy wipes the disk", async () => {
+    const { tide, store, memory } = setup();
+    tide.start(USER, USER);
+    tide.setBudget(USER, 25);
+    tide.setLaunches(USER, true);
+    tide.start(99, 99); // not an admin, found through the shared registry
+    await memory.flush();
+    store.wipeDerived();
+    expect(store.allUserIds()).toEqual([]);
+    expect(await tide.restore([])).toBe(2);
+    expect(store.getUser(USER)!.budgetUsd).toBe(25);
+    expect(store.getPref(USER, "launches")).toBe("true");
+    expect(await tide.restore([])).toBe(0); // only runs on an empty cache
   });
 
   it("closes a position when the coin leaves the wallet", async () => {

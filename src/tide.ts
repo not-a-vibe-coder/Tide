@@ -3,7 +3,7 @@ import { STABLECOINS, SUI_COIN_TYPE, diffBalances, isCash, normaliseCoinType, to
 import { SOL_MINT, chainOf, type Chain } from "./core/chains.js";
 import { MIN_OUTCOMES_FOR_TRACK_RECORD, proposeBudget, startOfWeekLagos, suggestSize, trackRecordMultiplier } from "./core/sizing.js";
 import { replaySignals } from "./core/history.js";
-import { DEFAULT_LAUNCH_RULES, DEFAULT_SPIKE_RULES, assessRisk, detectLaunch, detectSpike, type LaunchRules, type SpikeRules } from "./core/spike.js";
+import { DEFAULT_LAUNCH_RULES, DEFAULT_SPIKE_RULES, assessRisk, detectLaunch, detectMover, detectSpike, type LaunchRules, type SpikeRules } from "./core/spike.js";
 import { readSafety, type TokenSafety } from "./core/safety.js";
 import type { Pool, RiskCheck, SizingResult, Spike, TokenClass } from "./core/types.js";
 import { NO_REASON, alertMessage, esc, holdingLine, pct, usd, type HoldingView } from "./bot/format.js";
@@ -12,6 +12,7 @@ import { log } from "./log.js";
 import type { Market } from "./market/gecko.js";
 import type { Store, User } from "./memory/store.js";
 import type { Memory } from "./memory/walrus.js";
+import { SHARED_NAMESPACE } from "./memory/events.js";
 
 export type AlertAction = "bought" | "skipped" | "not_for_me";
 
@@ -29,7 +30,8 @@ export interface Notifier {
 
 const HOUR = 60 * 60 * 1000;
 const POOL_COOLDOWN_MS = 6 * HOUR;
-const MAX_ALERTS_PER_DAY = 8;
+/** Safety cap; at one per chain every 45 minutes the real pace is far lower. */
+const MAX_ALERTS_PER_DAY = 64;
 
 /** Reads one chain's wallet. Sui via Tatum gRPC, Solana via Tatum RPC. */
 export interface ChainReader {
@@ -46,13 +48,8 @@ export type Readers = Partial<Record<Chain, ChainReader>>;
 /** Spike rules per chain. Solana is far busier, so its bar is higher. */
 export type ChainRules = Partial<Record<Chain, SpikeRules>>;
 
-/** Alerts per chain per scan, so one busy chain can't crowd out the other. */
-const SPIKES_PER_CHAIN = 2;
 /** Shared outcomes needed before new users start from the market's track record. */
 const MIN_SHARED_FOR_PRIOR = 20;
-/** Fresh-launch alerts per chain per scan, and per person per day. Launches are opt-in (/launches on). */
-const LAUNCHES_PER_CHAIN = 1;
-const MAX_LAUNCHES_PER_DAY = 6;
 
 export type ChainLaunchRules = Partial<Record<Chain, LaunchRules>>;
 
@@ -140,11 +137,35 @@ export class Tide {
 
   // ---- onboarding -------------------------------------------------------
 
+  /** Gap between alerts on the same chain for one user. */
+  alertGapMs = 45 * 60_000;
+
   start(userId: number, chatId: number): User {
+    this.register(userId);
     const existing = this.store.getUser(userId);
     if (!existing) this.memory.record(userId, { type: "profile_set", chatId, alertsOn: true });
     else if (existing.chatId !== chatId) this.memory.record(userId, { type: "profile_set", chatId });
     return this.store.getUser(userId)!;
+  }
+
+  /** Put a user in the shared registry once, so a fresh server can restore them from Walrus. */
+  register(userId: number): void {
+    this.memory.record(null, { type: "user_joined", telegramId: userId }, `user-joined-${userId}`);
+  }
+
+  /**
+   * After a restart with an empty cache (Render's free plan wipes the disk on
+   * every deploy), pull every known user back from Walrus Memory.
+   */
+  async restore(adminIds: number[]): Promise<number> {
+    if (this.store.allUserIds().length > 0) return 0;
+    const shared = await this.memory.fetchNamespace(SHARED_NAMESPACE);
+    const ids = new Set<number>(adminIds);
+    for (const e of shared) if (e.data.type === "user_joined") ids.add(e.data.telegramId);
+    if (ids.size === 0) return 0;
+    await this.memory.rebuild([...ids]);
+    for (const id of this.store.allUserIds()) this.register(id);
+    return this.store.allUserIds().length;
   }
 
   /**
@@ -272,8 +293,14 @@ export class Tide {
 
   // ---- spike scanner ----------------------------------------------------
 
+  /**
+   * Every few minutes: find this round's spikes, launches and steady movers on
+   * each chain, then give each user at most one per chain per `alertGapMs`
+   * (45 minutes by default). Spikes come first, then launches (if they opted
+   * in), then the best mover, so a quiet market still gets a pick.
+   */
   async scan(): Promise<number> {
-    const spikes: Spike[] = [];
+    const picks = new Map<Chain, Spike[]>();
     let failures = 0;
     for (const chain of this.chains) {
       const pools = await this.market.candidatePools(chain).catch((err) => {
@@ -281,41 +308,48 @@ export class Tide {
         log.warn(`${chain} pools failed: ${err instanceof Error ? err.message : err}`);
         return [];
       });
-      const fresh = (s: Spike) => !this.store.poolOnCooldown(s.pool.address, POOL_COOLDOWN_MS);
-      const chainSpikes = pools
-        .map((p) => detectSpike(p, this.rules[chain]))
+      const rules = this.rules[chain];
+      const spikes = pools
+        .map((p) => detectSpike(p, rules))
         .filter((s): s is Spike => s !== null)
-        .filter(fresh)
-        .sort((a, b) => b.pool.volumeUsd.h1 - a.pool.volumeUsd.h1)
-        .slice(0, SPIKES_PER_CHAIN);
-      const spiking = new Set(chainSpikes.map((s) => s.pool.address));
+        .sort((a, b) => b.pool.volumeUsd.h1 - a.pool.volumeUsd.h1);
+      const taken = new Set(spikes.map((s) => s.pool.address));
       const launches = pools
-        .filter((p) => !spiking.has(p.address))
+        .filter((p) => !taken.has(p.address))
         .map((p) => detectLaunch(p, this.launchRules[chain] ?? DEFAULT_LAUNCH_RULES))
         .filter((s): s is Spike => s !== null)
-        .filter(fresh)
-        .sort((a, b) => b.pool.liquidityUsd - a.pool.liquidityUsd)
-        .slice(0, LAUNCHES_PER_CHAIN);
-      spikes.push(...chainSpikes, ...launches);
+        .sort((a, b) => b.pool.liquidityUsd - a.pool.liquidityUsd);
+      for (const l of launches) taken.add(l.pool.address);
+      const movers = pools
+        .filter((p) => !taken.has(p.address))
+        .map((p) => detectMover(p, rules))
+        .filter((s): s is Spike => s !== null)
+        .sort((a, b) => b.pool.priceChangePct.h1 * Math.log10(b.pool.volumeUsd.h1 + 10) - a.pool.priceChangePct.h1 * Math.log10(a.pool.volumeUsd.h1 + 10));
+      picks.set(chain, [...spikes, ...launches, ...movers]);
     }
     if (failures === this.chains.length && failures > 0) throw new Error("market data unavailable");
 
+    const now = Date.now();
+    const risks = new Map<string, RiskCheck>();
     let sent = 0;
-    for (const spike of spikes) {
-      this.store.markPoolAlerted(spike.pool.address);
-      const risk = await this.riskFor(spike.pool);
-      const isLaunch = spike.kind === "launch";
-      for (const user of this.store.usersWithAlerts()) {
-        if (this.store.getPref(user.id, `mute_chain_${spike.pool.chain}`) === "true") continue;
-        const dayAgo = new Date(Date.now() - 24 * HOUR);
-        if (isLaunch) {
-          if (this.store.getPref(user.id, "launches") !== "true") continue;
-          if (this.store.recentAlertCount(user.id, dayAgo, "launch") >= MAX_LAUNCHES_PER_DAY) continue;
-        } else {
-          if (this.store.getPref(user.id, `mute_${spike.tokenClass}`) === "true") continue;
-          if (this.store.recentAlertCount(user.id, dayAgo, "spike") >= MAX_ALERTS_PER_DAY) continue;
-        }
-        await this.sendAlert(user, spike, risk);
+    for (const user of this.store.usersWithAlerts()) {
+      if (this.store.recentAlertCount(user.id, new Date(now - 24 * HOUR)) >= MAX_ALERTS_PER_DAY) continue;
+      const last = this.store.lastAlertByChain(user.id);
+      const seen = this.store.alertedPools(user.id, new Date(now - POOL_COOLDOWN_MS));
+      const launchesOn = this.store.getPref(user.id, "launches") === "true";
+      for (const chain of this.chains) {
+        if (this.store.getPref(user.id, `mute_chain_${chain}`) === "true") continue;
+        const lastAt = last.get(chain);
+        if (lastAt && now - lastAt.getTime() < this.alertGapMs) continue;
+        const pick = (picks.get(chain) ?? []).find((s) => {
+          if (seen.has(s.pool.address)) return false;
+          if (s.kind === "launch") return launchesOn;
+          return this.store.getPref(user.id, `mute_${s.tokenClass}`) !== "true";
+        });
+        if (!pick) continue;
+        let risk = risks.get(pick.pool.address);
+        if (!risk) risks.set(pick.pool.address, (risk = await this.riskFor(pick.pool)));
+        await this.sendAlert(user, pick, risk);
         sent++;
       }
     }

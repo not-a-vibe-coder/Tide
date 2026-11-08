@@ -212,6 +212,7 @@ describe("Tide with Sui and Solana wallets", () => {
     expect(sent.some((m) => m.includes("moving on solana"))).toBe(true);
     expect(sent.some((m) => m.includes("geckoterminal.com/solana/pools/sol1"))).toBe(true);
 
+    tide.alertGapMs = 0;
     tide.setAlertChains(1, ["sui"]);
     pools.sui = [pool({ address: "0xs2" })];
     pools.solana = [pool({ chain: "solana", address: "sol2", baseCoinType: BONK, baseSymbol: "BONK" })];

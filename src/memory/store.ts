@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Balance, TokenClass } from "../core/types.js";
+import { chainOf, type Chain } from "../core/chains.js";
 import { namespaceFor, type TideEvent } from "./events.js";
 
 export interface User {
@@ -346,6 +347,37 @@ export class Store {
   outcomeSources(): { live: number; history: number } {
     const rows = this.db.prepare("SELECT source, COUNT(*) n FROM token_outcomes GROUP BY source").all() as { source: string; n: number }[];
     return { live: rows.find((r) => r.source === "live")?.n ?? 0, history: rows.find((r) => r.source === "history")?.n ?? 0 };
+  }
+
+  /** When this user last got an alert on each chain (chain read from the coin id). */
+  lastAlertByChain(userId: number): Map<Chain, Date> {
+    const rows = this.db
+      .prepare("SELECT coin_type, sent_at FROM alerts WHERE user_id = ? ORDER BY sent_at DESC LIMIT 100")
+      .all(userId) as { coin_type: string; sent_at: string }[];
+    const out = new Map<Chain, Date>();
+    for (const r of rows) {
+      const c = chainOf(r.coin_type);
+      if (!out.has(c)) out.set(c, new Date(r.sent_at));
+    }
+    return out;
+  }
+
+  /** Pools this user was alerted on since a time, so they never get the same one twice in a row. */
+  alertedPools(userId: number, since: Date): Set<string> {
+    const rows = this.db
+      .prepare("SELECT pool_address FROM alerts WHERE user_id = ? AND sent_at >= ?")
+      .all(userId, since.toISOString()) as { pool_address: string }[];
+    return new Set(rows.map((r) => r.pool_address));
+  }
+
+  /** Telegram ids in the shared user registry. */
+  registeredUsers(): number[] {
+    const rows = this.db.prepare("SELECT json FROM events WHERE type = 'user_joined'").all() as { json: string }[];
+    return rows.map((r) => (JSON.parse(r.json) as { data: { telegramId: number } }).data.telegramId);
+  }
+
+  allUserIds(): number[] {
+    return (this.db.prepare("SELECT id FROM users").all() as { id: number }[]).map((r) => r.id);
   }
 
   recentAlertCount(userId: number, since: Date, kind?: "spike" | "launch"): number {

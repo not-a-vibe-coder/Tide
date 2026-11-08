@@ -43,7 +43,7 @@ export type EventData =
       trackRecord: number;
       reasons: string[];
       /** "launch" for a fresh-launch alert. Older events have no kind and count as spikes. */
-      kind?: "spike" | "launch";
+      kind?: "spike" | "launch" | "mover";
     }
   | { type: "alert_action"; alertId: string; symbol: string; action: "bought" | "skipped" | "not_for_me" }
   | { type: "alert_outcome"; alertId: string; symbol: string; tokenClass: TokenClass; changePct: number }
@@ -58,8 +58,10 @@ export type EventData =
       source?: "live" | "history";
       /** When the signal fired, for history outcomes. */
       signalAt?: string;
-      kind?: "spike" | "launch";
-    };
+      kind?: "spike" | "launch" | "mover";
+    }
+  /** Shared registry of who uses Tide, so a fresh server knows whose memory to restore. */
+  | { type: "user_joined"; telegramId: number };
 
 export type EventType = EventData["type"];
 
@@ -73,6 +75,7 @@ export const EVENT_TYPES: EventType[] = [
   "alert_outcome",
   "preference",
   "token_outcome",
+  "user_joined",
 ];
 
 export interface TideEvent {
@@ -116,13 +119,15 @@ export function describe(e: TideEvent): string {
     case "position_closed":
       return `${who} closed ${d.symbol}${d.pnlPct === null ? "" : ` at ${d.pnlPct.toFixed(1)}%`}`;
     case "alert_sent":
-      return `${d.kind === "launch" ? "Launch alert" : "Alert"} to ${who} on ${d.symbol} (${d.tokenClass} token): ${d.reasons.join("; ")}. Risk ${d.risk}, suggested max ${usd(d.sizeUsd)}`;
+      return `${d.kind === "launch" ? "Launch alert" : d.kind === "mover" ? "Mover alert" : "Alert"} to ${who} on ${d.symbol} (${d.tokenClass} token): ${d.reasons.join("; ")}. Risk ${d.risk}, suggested max ${usd(d.sizeUsd)}`;
     case "alert_action":
       return `${who} ${d.action.replace(/_/g, " ")} the ${d.symbol} alert`;
     case "alert_outcome":
       return `${d.symbol} (${d.tokenClass} token) was ${d.changePct.toFixed(1)}% 24h after the alert to ${who}`;
     case "preference":
       return `${who} preference ${d.key} = ${d.value}`;
+    case "user_joined":
+      return `User ${d.telegramId} uses Tide`;
     case "token_outcome":
       return d.source === "history"
         ? `Market history: ${d.symbol} (${d.tokenClass} token) moved ${d.changePct.toFixed(1)}% in the 24h after a ${d.kind ?? "spike"} signal at ${d.signalAt ?? "unknown time"}`

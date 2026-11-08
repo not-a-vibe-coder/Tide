@@ -67,17 +67,27 @@ describe("launch alerts", () => {
     expect(sent[0]).toContain("most of them go to zero");
   });
 
-  it("have their own daily cap, separate from spike alerts", async () => {
+  it("come one per chain every 45 minutes, never the same pool twice", async () => {
     const { tide, store, setPools } = setup();
     tide.start(1, 1);
     tide.setLaunches(1, true);
-    for (let i = 0; i < 8; i++) {
-      setPools([launch({ address: `0xnew${i}` })]);
-      await tide.scan();
-    }
+    setPools([launch({ address: "0xnew1" }), launch({ address: "0xnew2" })]);
+    expect(await tide.scan()).toBe(1);
+    expect(await tide.scan()).toBe(0); // too soon
+    tide.alertGapMs = 0;
+    expect(await tide.scan()).toBe(1); // the other launch, not 0xnew1 again
+    expect(await tide.scan()).toBe(0); // nothing new left
     const day = new Date(Date.now() - 24 * 3_600_000);
-    expect(store.recentAlertCount(1, day, "launch")).toBe(6);
-    expect(store.recentAlertCount(1, day, "spike")).toBe(0);
+    expect(store.recentAlertCount(1, day, "launch")).toBe(2);
+  });
+
+  it("fall back to the strongest mover when nothing spiked or launched", async () => {
+    const { tide, sent, setPools } = setup();
+    tide.start(1, 1);
+    const calm = pool({ address: "0xcalm", baseSymbol: "CALM", priceChangePct: { m5: 1, h1: 9, h6: 12, h24: 15 }, volumeUsd: { m5: 500, h1: 4_000, h6: 20_000, h24: 80_000 }, txH1: { buys: 40, sells: 20 } });
+    setPools([calm]);
+    expect(await tide.scan()).toBe(1);
+    expect(sent.at(-1)).toContain("strongest mover on sui");
   });
 
   it("feed the new-token track record like any alert", async () => {
