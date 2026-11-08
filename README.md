@@ -1,3 +1,5 @@
+<p align="center"><img src="web/assets/tide-wordmark.jpg" alt="tide" width="640"></p>
+
 # Tide
 
 A Telegram bot that spots Sui and Solana tokens gaining momentum, tracks how your own trades are doing, and suggests how much to risk based on your budget and your track record. Everything it learns about you is stored on **Walrus Memory**, so its alerts and sizing change as it gets to know you.
