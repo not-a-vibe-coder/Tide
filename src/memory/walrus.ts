@@ -9,6 +9,7 @@ import {
   namespaceFor,
   userNamespace,
   type EventData,
+  type EventType,
   type TideEvent,
   newEvent,
 } from "./events.js";
@@ -18,6 +19,7 @@ import type { Store } from "./store.js";
 const WRITE_SLOTS = 2;
 /** Most results one Walrus recall returns. */
 const RECALL_LIMIT = 100;
+const RECALL_TIMEOUT_MS = 20_000;
 
 /** Narrower search phrases for event types with more than one recall's worth of memories. */
 export function recallHints(now = new Date()): string[] {
@@ -49,6 +51,10 @@ export type MemoryClient = Pick<MemWal, "rememberAsync" | "waitForRememberJob" |
 export class Memory {
   private readonly client: MemoryClient | null;
   private readonly inflight = new Set<Promise<void>>();
+  /** Namespaces whose last rebuild hit the recall cap, for a follow-up deepFill. */
+  lastCapped: { namespace: string; types: EventType[] }[] = [];
+  /** How long one recall may take before it's skipped. */
+  recallTimeoutMs = RECALL_TIMEOUT_MS;
 
   constructor(
     private readonly store: Store,
@@ -151,34 +157,82 @@ export class Memory {
   }
 
   /** Read back every Tide event stored in a namespace. */
-  async fetchNamespace(namespace: string): Promise<TideEvent[]> {
+  /** One recall with a time limit, so a slow search can't stall a restore. */
+  private async recallSafe(namespace: string, query: string): Promise<string[]> {
     if (!this.client) return [];
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error("recall timed out")), this.recallTimeoutMs)));
+    try {
+      const res = await Promise.race([this.client.recall({ query, limit: RECALL_LIMIT, namespace }), timeout]);
+      return res.results.map((m) => m.text);
+    } catch (err) {
+      log.debug(`recall "${query}" in ${namespace} failed: ${err instanceof Error ? err.message : err}`);
+      return [];
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Decode recall texts of one type into `seen`; returns how many were new. */
+  private collect(texts: string[], type: string, seen: Map<string, TideEvent>): number {
+    let added = 0;
+    for (const t of texts) {
+      const e = decodeEvent(t);
+      if (e && e.data.type === type && !seen.has(e.id)) (seen.set(e.id, e), added++);
+    }
+    return added;
+  }
+
+  /**
+   * Everything in a namespace, one recall per event type (fast). `full` lists the types that
+   * hit the 100-result cap, for deepFill to dig into later.
+   */
+  async fetchNamespaceShallow(namespace: string): Promise<{ events: TideEvent[]; full: EventType[] }> {
     const seen = new Map<string, TideEvent>();
-    // Recall is similarity search capped at 100 per call. Ask once per event type, and when a
-    // type fills the cap, ask again with narrower hints (class, kind, chain, recent dates).
-    // Only full types pay for the extra searches, and only on a restore.
-    const ask = async (type: string, query: string) => {
-      const res = await this.client!.recall({ query, limit: RECALL_LIMIT, namespace });
-      let added = 0;
-      for (const m of res.results) {
-        const e = decodeEvent(m.text);
-        if (e && e.data.type === type && !seen.has(e.id)) {
-          seen.set(e.id, e);
-          added++;
-        }
-      }
-      return { full: res.results.length >= RECALL_LIMIT, added };
-    };
-    for (const type of EVENT_TYPES) {
-      const first = await ask(type, `[tide:${type}]`);
-      if (!first.full) continue;
+    const full: EventType[] = [];
+    await Promise.all(
+      EVENT_TYPES.map(async (type) => {
+        const texts = await this.recallSafe(namespace, `[tide:${type}]`);
+        this.collect(texts, type, seen);
+        if (texts.length >= RECALL_LIMIT) full.push(type);
+      }),
+    );
+    return { events: [...seen.values()].sort((a, b) => a.at.localeCompare(b.at)), full };
+  }
+
+  /**
+   * More of the types that hit the cap, through narrower searches (class, kind, chain, recent
+   * dates), a few at a time, until the time budget runs out. Returns only events not in `known`.
+   */
+  async deepFill(namespace: string, types: EventType[], known: Set<string>, budgetMs = 4 * 60_000): Promise<TideEvent[]> {
+    const deadline = Date.now() + budgetMs;
+    const found = new Map<string, TideEvent>();
+    for (const id of known) found.set(id, null as never);
+    for (const type of types) {
       const hints = recallHints();
-      for (let i = 0; i < hints.length; i += 6) {
-        await Promise.all(hints.slice(i, i + 6).map((h) => ask(type, `[tide:${type}] ${h}`).catch(() => null)));
+      for (let i = 0; i < hints.length && Date.now() < deadline; i += 4) {
+        const batch = await Promise.all(hints.slice(i, i + 4).map((h) => this.recallSafe(namespace, `[tide:${type}] ${h}`)));
+        for (const texts of batch) this.collect(texts, type, found);
       }
     }
-    return [...seen.values()].sort((a, b) => a.at.localeCompare(b.at));
+    return [...found.values()].filter((e): e is TideEvent => e !== null && !known.has(e.id));
   }
+
+  /** Shallow fetch plus a deep fill of capped types: the whole namespace, as far as recall allows. */
+  async fetchNamespace(namespace: string, budgetMs?: number): Promise<TideEvent[]> {
+    const { events, full } = await this.fetchNamespaceShallow(namespace);
+    if (!full.length) return events;
+    const more = await this.deepFill(namespace, full, new Set(events.map((e) => e.id)), budgetMs);
+    return [...events, ...more].sort((a, b) => a.at.localeCompare(b.at));
+  }
+
+  /** Apply events that may be older than what's local without disturbing newer state (outcomes, alerts). */
+  applyMore(events: TideEvent[]): number {
+    let n = 0;
+    for (const e of [...events].sort((a, b) => a.at.localeCompare(b.at))) if (this.store.apply(e)) n++;
+    return n;
+  }
+
 
   /**
    * Memories about this user that relate to what they just said, via Walrus
@@ -208,7 +262,14 @@ export class Memory {
     await this.flush();
     const namespaces = [SHARED_NAMESPACE, ...userIds.map(userNamespace)];
     const fetched = new Map<string, TideEvent[]>();
-    await Promise.all(namespaces.map(async (ns) => fetched.set(ns, await this.fetchNamespace(ns))));
+    this.lastCapped = [];
+    await Promise.all(
+      namespaces.map(async (ns) => {
+        const { events, full } = await this.fetchNamespaceShallow(ns);
+        fetched.set(ns, events);
+        if (full.length) this.lastCapped.push({ namespace: ns, types: full });
+      }),
+    );
 
     // Merge with what's already local (things done since this server started, and writes Walrus
     // hasn't indexed yet), then replay everything in time order so the latest change wins.

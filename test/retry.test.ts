@@ -95,3 +95,21 @@ describe("pulling memory back from Walrus", () => {
     expect(events).toHaveLength(260);
   });
 });
+
+describe("a restore with a stuck search", () => {
+  it("skips the stuck search and restores the rest", async () => {
+    const { encodeEvent, newEvent, userNamespace } = await import("../src/memory/events.js");
+    const profile = encodeEvent(newEvent(5, { type: "profile_set", chatId: 5, budgetUsd: 40 }));
+    const client = {
+      recall: ({ query, namespace }: { query: string; namespace: string }) =>
+        query.includes("buy_detected")
+          ? new Promise(() => {}) // never answers
+          : Promise.resolve({ results: namespace === userNamespace(5) && query.includes("profile_set") ? [{ text: profile }] : [] }),
+    } as unknown as MemoryClient;
+    const store = new Store(":memory:");
+    const memory = new Memory(store, { privateKey: "", accountId: "", serverUrl: "", dryRun: false, client }, [1]);
+    memory.recallTimeoutMs = 50;
+    await memory.rebuild([5]);
+    expect(store.getUser(5)!.budgetUsd).toBe(40);
+  });
+});

@@ -167,13 +167,24 @@ export class Tide {
   async restore(adminIds: number[]): Promise<number> {
     // Always runs at startup, even if someone already messaged the new server: their fresh
     // record is merged with their history instead of hiding it.
-    const shared = await this.memory.fetchNamespace(SHARED_NAMESPACE);
+    const { events: shared } = await this.memory.fetchNamespaceShallow(SHARED_NAMESPACE);
     const ids = new Set<number>([...adminIds, ...this.store.allUserIds()]);
     for (const e of shared) if (e.data.type === "user_joined") ids.add(e.data.telegramId);
     if (ids.size === 0) return 0;
     await this.memory.rebuild([...ids]);
     for (const id of this.store.allUserIds()) this.register(id);
     return this.store.allUserIds().length;
+  }
+
+  /** Phase two of a restore: dig past the 100-per-search cap, within a time budget. */
+  async restoreDeep(budgetMs = 4 * 60_000): Promise<number> {
+    let added = 0;
+    for (const { namespace, types } of this.memory.lastCapped) {
+      const known = new Set(this.store.allEvents().map((e) => e.id));
+      const more = await this.memory.deepFill(namespace, types, known, budgetMs);
+      added += this.memory.applyMore(more);
+    }
+    return added;
   }
 
   /**
