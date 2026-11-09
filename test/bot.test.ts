@@ -1,6 +1,6 @@
 import { MemWalMock } from "@mysten-incubation/memwal";
 import { describe, expect, it } from "vitest";
-import { calledByName, createBot } from "../src/bot/bot.js";
+import { calledByName, createBot, welcome } from "../src/bot/bot.js";
 import type { Market } from "../src/market/gecko.js";
 import { Store } from "../src/memory/store.js";
 import { Memory } from "../src/memory/walrus.js";
@@ -204,5 +204,18 @@ describe("calling tide by name", () => {
     expect(sent).toHaveLength(1);
     await group("the tide is turning");
     expect(sent).toHaveLength(1);
+  });
+});
+
+describe("welcome", () => {
+  it("explains what tide does in plain words before asking for a wallet", async () => {
+    const { sent, say } = harness();
+    await say("/start");
+    const msg = sent.at(-1)!;
+    expect(msg).toBe(welcome("Pascal"));
+    for (const bit of ["find tokens as they start moving", "red flags", "how much i'd risk", "remember why you bought", "low caps", "only send tokens under 100k mcap", "wallet address", "never ask for your keys"]) {
+      expect(msg).toContain(bit);
+    }
+    expect(msg).not.toMatch(/[—–]|walrus|namespace/i);
   });
 });

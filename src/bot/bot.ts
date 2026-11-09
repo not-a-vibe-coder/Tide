@@ -37,6 +37,24 @@ const HELP = [
   "i remember what you tell me, so you never have to repeat yourself. nothing i say is financial advice.",
 ].join("\n");
 
+/** First message a new person sees: what tide does for them, in plain words, then the one step to start. */
+export function welcome(firstName?: string): string {
+  return [
+    `hey${firstName ? ` ${esc(firstName.toLowerCase())}` : ""}, i'm <b>tide</b>, your trading friend on sui and solana. here's what i do for you:`,
+    "",
+    "📈 <b>i find tokens as they start moving.</b> about every 45 minutes i send you the best pick on each chain: something suddenly getting bought hard, or a fresh launch if you want those.",
+    "🚩 <b>i tell you what could go wrong.</b> every pick comes with the red flags first, like a tiny exit, a pool that's hours old, or a creator who can still print more tokens.",
+    "💵 <b>i tell you how much i'd risk.</b> you set a weekly budget and i size each pick from it, smaller when the token looks risky or when your recent calls went bad.",
+    "🧠 <b>i remember why you bought.</b> when a new token lands in your wallet i ask why, then later i tell you if that reason still holds.",
+    "🔎 <b>ask me anything.</b> \"why shouldn't i buy $WIF?\", \"top 5 on solana\", \"find me low caps under 50k\", \"how much volume is on sui\". just talk normally, pidgin is fine too.",
+    "🎯 <b>you set the rules.</b> say \"only send tokens under 100k mcap\", \"turn on launch alerts\" or \"only solana\" and i'll stick to it.",
+    "",
+    "to start, paste your <b>sui or solana wallet address</b>. i only read public data, i'll never ask for your keys or to sign anything.",
+    "",
+    "<i>nothing i say is financial advice. most new tokens go to zero, so only use money you can lose.</i>",
+  ].join("\n");
+}
+
 /** A pasted Sui or Solana wallet address. */
 function parseWallet(text: string): { chain: Chain; address: string } | null {
   const sui = parseSuiAddress(text);
@@ -239,15 +257,7 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
       await reply(ctx, `${hey(ctx) || "hey, "}welcome back. still watching ${watching} for you.\n\n${HELP}`);
       return;
     }
-    await reply(
-      ctx,
-      [
-        `hey${ctx.from?.first_name ? ` ${esc(ctx.from.first_name.toLowerCase())}` : ""}, i'm <b>tide</b>.`,
-        "i watch sui and solana for tokens that start picking up volume, keep track of what you buy and why, and tell you how much i'd risk based on your own budget and record. you can talk to me normally, no commands needed.",
-        "",
-        "paste your <b>sui or solana wallet address</b> and we'll start. i only read public data, i'll never ask for keys or signatures.",
-      ].join("\n"),
-    );
+    await reply(ctx, welcome(ctx.from?.first_name));
   });
 
   // ---- actions, shared by slash commands and plain-language requests ----
