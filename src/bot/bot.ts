@@ -7,8 +7,11 @@ import { CHAIN_LABEL, parseSolanaAddress, type Chain } from "../core/chains.js";
 import type { CheckResult } from "../checks.js";
 import { log } from "../log.js";
 import type { AlertAction, Button, Notifier, Tide } from "../tide.js";
-import { esc, shortAddress, topList, usd } from "./format.js";
-import { parseIntent, type Intent } from "./intents.js";
+import { chainVolumeLine, esc, lowCapList, shortAddress, topList, usd } from "./format.js";
+import { assessRisk } from "../core/spike.js";
+import { describeCapRange } from "../core/filters.js";
+import type { Pool } from "../core/types.js";
+import { amounts, parseIntent, type Intent } from "./intents.js";
 
 const HELP = [
   "i'm <b>tide</b>. i watch sui and solana for tokens that start moving, keep track of what you buy and why, and get stricter with you when your calls go bad. you can just talk to me too, or ask me about any token.",
@@ -22,10 +25,14 @@ const HELP = [
   "/alerts on, off or reset · pause me, or unmute token types",
   "/alerts sui, solana or both · which chains you hear about",
   "/launches on or off · ping me when a new token launches (riskiest stuff, off by default)",
+  "/mcap <code>100k</code> or <code>20k-150k</code> · only send tokens in that market cap range (/mcap off clears it)",
+  "/pumped <code>200</code> · skip tokens already up more than that % in 24h (default 100, /pumped off allows them)",
+  "/lowcaps <code>solana 50k</code> · small caps with real buyers right now",
+  "/volume · how much dex volume sui and solana did in the last 24h",
   "/wallet <code>address</code> · add or change a sui or solana wallet",
   "/memory · everything i remember about you",
   "",
-  "no commands needed, you can just say things like \"turn on launch alerts\", \"only solana alerts\", \"set my budget to 50\", \"show my bags\" or \"why shouldn't i buy $WIF\".",
+  "no commands needed, you can just say things like \"turn on launch alerts\", \"only send tokens under 100k mcap\", \"find me low caps on solana\", \"how much volume is on sui\", \"show my bags\" or \"why shouldn't i buy $WIF\".",
   "",
   "i remember what you tell me, so you never have to repeat yourself. nothing i say is financial advice.",
 ].join("\n");
@@ -136,7 +143,7 @@ export function createBot(token: string, tide: Tide, opts: BotOptions): Bot {
       ].join("\n"),
       dmButton(),
     );
-  const PERSONAL_COMMANDS = new Set(["wallet", "budget", "share", "holdings", "check", "scan", "alerts", "launches", "memory", "doctor", "backfill", "rebuild"]);
+  const PERSONAL_COMMANDS = new Set(["wallet", "budget", "share", "holdings", "check", "scan", "alerts", "launches", "mcap", "pumped", "memory", "doctor", "backfill", "rebuild"]);
 
   bot.on("my_chat_member", async (ctx) => {
     const was = ctx.myChatMember.old_chat_member.status;
@@ -170,6 +177,8 @@ export function createBot(token: string, tide: Tide, opts: BotOptions): Bot {
     if (wallet && !(wallet.chain === "solana" && (await tide.isSolanaMint(wallet.address)))) return toPrivate(ctx);
     const intent = wallet ? null : parseIntent(text);
     if (intent?.action === "top") return act.top(ctx, intent.chains);
+    if (intent?.action === "lowCaps") return act.lowCaps(ctx, intent.chains, intent.maxCap);
+    if (intent?.action === "chainVolume") return act.chainVolume(ctx, intent.chains);
     if (intent?.action === "help") return groupHello(ctx);
     if (intent) return toPrivate(ctx);
 
@@ -324,6 +333,44 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
     },
 
     memory: (ctx: Context) => reply(ctx, tide.memoryReport(ctx.from!.id)),
+
+    mcap: (ctx: Context, range: { min?: number | null; max?: number | null }) => {
+      const f = tide.setMcap(ctx.from!.id, range);
+      if (f.mcapMin === null && f.mcapMax === null) return reply(ctx, "no market cap limit now, any size can come through.");
+      const low = (f.mcapMax ?? Infinity) <= 250_000;
+      return reply(
+        ctx,
+        `got it, i'll only send tokens with a market cap ${describeCapRange(f, usd)}.${low ? " small caps are where most rugs happen, so expect more red flags and smaller sizes from me." : ""} say "any market cap" to clear it.`,
+      );
+    },
+
+    pump: (ctx: Context, pct: number | null) => {
+      tide.setPumpLimit(ctx.from!.id, pct);
+      return reply(
+        ctx,
+        pct === null
+          ? "okay, tokens that already ran can come through again."
+          : `okay, i'll skip anything already up more than ${pct}% in the last 24h (for a brand-new pool that's since launch). say "allow pumped tokens" to turn it off.`,
+      );
+    },
+
+    lowCaps: async (ctx: Context, chains?: Chain[], maxCap = 100_000) => {
+      await ctx.replyWithChatAction("typing").catch(() => {});
+      background(ctx, "lowcaps", async () => {
+        const lists = await tide.lowCaps(chains?.length ? chains : tide.chains, maxCap);
+        const label = (p: Pool) => assessRisk(p).label;
+        const body = lists.map((l) => (l.error ? `couldn't load ${CHAIN_LABEL[l.chain]} right now.` : lowCapList(l.chain, l.pools, maxCap, label))).join("\n\n");
+        await reply(ctx, `${body}\n\nmost tokens this small go to zero. ask me about any of these for the red flags before you touch it. nfa.`);
+      });
+    },
+
+    chainVolume: async (ctx: Context, chains?: Chain[]) => {
+      await ctx.replyWithChatAction("typing").catch(() => {});
+      background(ctx, "volume", async () => {
+        const rows = await tide.chainVolume(chains?.length ? chains : tide.chains);
+        await reply(ctx, rows.map(chainVolumeLine).join("\n\n"));
+      });
+    },
   };
 
   /** Run a plain-language request. */
@@ -353,6 +400,14 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
         return act.memory(ctx);
       case "help":
         return act.help(ctx);
+      case "mcap":
+        return act.mcap(ctx, { min: i.min, max: i.max });
+      case "pump":
+        return act.pump(ctx, i.pct);
+      case "lowCaps":
+        return act.lowCaps(ctx, i.chains, i.maxCap);
+      case "chainVolume":
+        return act.chainVolume(ctx, i.chains);
     }
   };
 
@@ -389,6 +444,45 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
     const chains = args.filter((a): a is Chain => a === "sui" || a === "solana");
     const fresh = args.some((a) => a === "new" || a === "24h" || a === "fresh");
     return act.top(ctx, chains.length ? chains : undefined, fresh);
+  });
+
+  bot.command("mcap", (ctx) => {
+    ensureUser(ctx);
+    const arg = (ctx.match ?? "").trim().toLowerCase();
+    if (!arg) {
+      const f = tide.filtersFor(ctx.from!.id);
+      return reply(ctx, `right now i send tokens with a market cap ${describeCapRange(f, usd)}. set it like <code>/mcap 100k</code>, <code>/mcap 20k-150k</code> or <code>/mcap off</code>.`);
+    }
+    if (arg === "off" || arg === "any") return act.mcap(ctx, { min: null, max: null });
+    const n = amounts(arg);
+    if (n.length >= 2) return act.mcap(ctx, { min: Math.min(n[0]!, n[1]!), max: Math.max(n[0]!, n[1]!) });
+    if (n.length === 1) return act.mcap(ctx, { min: null, max: n[0]! });
+    return reply(ctx, "send it like <code>/mcap 100k</code> or <code>/mcap 20k-150k</code>.");
+  });
+
+  bot.command("pumped", (ctx) => {
+    ensureUser(ctx);
+    const arg = (ctx.match ?? "").trim().toLowerCase();
+    if (arg === "off" || arg === "allow") return act.pump(ctx, null);
+    const n = Number(arg.replace("%", ""));
+    if (arg && Number.isFinite(n) && n > 0) return act.pump(ctx, n);
+    const f = tide.filtersFor(ctx.from!.id);
+    return reply(ctx, `${f.maxPumpPct === null ? "i'm not skipping pumped tokens right now." : `i skip anything already up more than ${f.maxPumpPct}% in 24h.`} change it with <code>/pumped 200</code> or <code>/pumped off</code>.`);
+  });
+
+  bot.command("lowcaps", (ctx) => {
+    ensureUser(ctx);
+    const arg = (ctx.match ?? "").toLowerCase();
+    const chains = (["sui", "solana"] as const).filter((c) => arg.includes(c));
+    const cap = amounts(arg).find((n) => n >= 1_000);
+    return act.lowCaps(ctx, chains.length ? [...chains] : undefined, cap);
+  });
+
+  bot.command("volume", (ctx) => {
+    ensureUser(ctx);
+    const arg = (ctx.match ?? "").toLowerCase();
+    const chains = (["sui", "solana"] as const).filter((c) => arg.includes(c));
+    return act.chainVolume(ctx, chains.length ? [...chains] : undefined);
   });
 
   bot.command("alerts", (ctx) => {

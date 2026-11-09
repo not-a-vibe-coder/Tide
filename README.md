@@ -116,6 +116,14 @@ You don't need them. Plain words work for every setting and action, in English o
 | `/backfill` | Replay a week of market history into shared memory (admin only) |
 | `/rebuild` | Wipe test (admin only) |
 
+### Your own limits, and market lookups
+
+- **Market cap range** for alerts: "only send tokens under 100k mcap", "mcap between 20k and 150k" or `/mcap 20k-150k`. "any market cap" clears it.
+- **Skip what already ran**: by default Tide skips anything already up more than 100% in 24h (for a pool under a day old, that's since launch). "skip tokens already up 200%" or `/pumped 200` changes it, "allow pumped tokens" turns it off.
+- **Earliest launches first**: launch alerts favour the youngest, smallest pools that already have buyers.
+- **Low caps now**: "find me low caps on solana under 50k" or `/lowcaps solana 50k` lists small caps with real buyers, busiest hour first, each with a risk label.
+- **Chain volume**: "how much volume is on sui" or `/volume` gives each chain's 24h DEX volume and change from DefiLlama, with its biggest DEXes.
+
 ### In groups
 
 Add @usetidebot to a group and it says hello. It only answers when someone calls it by name (`hey tide, thoughts on $WIF?`), tags it, or replies to one of its messages, so it never floods the chat. Token reads and top lists work in the group. Anything personal (wallets, budgets, bags, alerts) gets a button to continue in private, and personal alerts always go to the private chat. Tags and replies work with Telegram's default privacy mode. For "hey tide" to work, turn privacy mode off in BotFather (`/setprivacy` → Disable) and re-add the bot to the group, or make it a group admin.

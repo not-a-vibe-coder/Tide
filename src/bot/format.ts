@@ -119,6 +119,34 @@ export function topList(chain: Chain, pools: Pool[], fresh = false, now = Date.n
   return [title, ...lines].join("\n");
 }
 
+/** Small caps with activity right now, with each one's risk read. */
+export function lowCapList(chain: Chain, pools: Pool[], maxCap: number, riskLabel: (p: Pool) => string, now = Date.now()): string {
+  const title = `<b>low caps on ${CHAIN_LABEL[chain]} under ${usd(maxCap)}, busiest hour first</b>`;
+  if (!pools.length) return `${title}\nnothing under that with real buyers right now.`;
+  const lines = pools.map((p, i) => {
+    const cap = p.marketCapUsd ?? p.fdvUsd;
+    const age = p.createdAt ? `${shortAge(now - p.createdAt.getTime())} old` : "age unknown";
+    return `${i + 1}. <b>${esc(p.baseSymbol)}</b> mcap ${usd(cap)} · ${age} · liq ${usd(p.liquidityUsd)} · ${usd(p.volumeUsd.h1)} in 1h (${pct(p.priceChangePct.h1)}) · ${p.txH1.buys} buys / ${p.txH1.sells} sells · risk ${riskLabel(p)}`;
+  });
+  return [title, ...lines].join("\n");
+}
+
+const bigUsd = (n: number) => (n >= 1e9 ? `$${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : usd(n));
+
+/** "solana did $2.31B in dex volume in the last 24h, down 8% on the day before." */
+export function chainVolumeLine(
+  r: { chain: Chain } & ({ volume: { total24h: number; change1d: number | null; total7d: number | null; topDexes: { name: string; total24h: number }[] } } | { approxUsd: number } | { error: string }),
+): string {
+  const name = CHAIN_LABEL[r.chain];
+  if ("error" in r) return `couldn't get ${name} volume right now.`;
+  if ("approxUsd" in r) return `<b>${name}</b>: about ${bigUsd(r.approxUsd)} across its top 20 pools in the last 24h (the full-chain number wasn't available just now).`;
+  const v = r.volume;
+  const change = v.change1d === null ? "" : `, ${v.change1d >= 0 ? "up" : "down"} ${Math.abs(v.change1d).toFixed(0)}% on the day before`;
+  const week = v.total7d ? ` · ${bigUsd(v.total7d)} this week` : "";
+  const dexes = v.topDexes.length ? `\nbiggest: ${v.topDexes.map((d) => `${esc(d.name.toLowerCase())} ${bigUsd(d.total24h)}`).join(", ")}` : "";
+  return `<b>${name}</b> did ${bigUsd(v.total24h)} in dex volume in the last 24h${change}${week}.${dexes}`;
+}
+
 function shortAge(ms: number): string {
   const h = ms / 3_600_000;
   if (h < 1) return `${Math.max(1, Math.round(ms / 60_000))}m`;

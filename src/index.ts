@@ -14,6 +14,7 @@ import { Market } from "./market/gecko.js";
 import { Store } from "./memory/store.js";
 import { Memory } from "./memory/walrus.js";
 import { Tide, type ChainRules, type Readers } from "./tide.js";
+import { ChainVolumes } from "./market/llama.js";
 
 async function main() {
   const cfg = loadConfig();
@@ -42,6 +43,7 @@ async function main() {
   }
   const tide = new Tide(store, memory, readers, market, rules);
   tide.alertGapMs = cfg.ALERT_GAP_MINUTES * 60_000;
+  tide.volumes = new ChainVolumes();
   log.info(`chains: ${tide.chains.join(", ")}`);
 
   log.info("Walrus Memory:", await memory.health().catch((e) => `unreachable (${e.message})`));
@@ -70,6 +72,10 @@ async function main() {
     { command: "budget", description: "how much you'll risk a week" },
     { command: "alerts", description: "pause me, or pick sui, solana or both" },
     { command: "launches", description: "ping me on brand-new token launches" },
+    { command: "lowcaps", description: "small caps with real buyers right now" },
+    { command: "mcap", description: "only send tokens in a market cap range" },
+    { command: "pumped", description: "skip tokens that already ran" },
+    { command: "volume", description: "dex volume on sui and solana today" },
     { command: "memory", description: "what i remember about you" },
     { command: "help", description: "everything i can do" },
   ]);

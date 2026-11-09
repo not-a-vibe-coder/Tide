@@ -17,7 +17,12 @@ export type Intent =
   | { action: "scan" }
   | { action: "top"; chains?: Chain[] }
   | { action: "memory" }
-  | { action: "help" };
+  | { action: "help" }
+  /** undefined = leave that side as it is, null = remove the limit. */
+  | { action: "mcap"; min?: number | null; max?: number | null }
+  | { action: "pump"; pct: number | null }
+  | { action: "lowCaps"; chains?: Chain[]; maxCap?: number }
+  | { action: "chainVolume"; chains?: Chain[] };
 
 const ON = /\b(turn|switch|put|flip)\b[\w\s]{0,24}?\bon\b|\bback\s+on\b|\b(enable|activate|start|resume|unpause|unmute)\b|\bon\s+am\b|\b(alert|notify|ping|tell|let)\s+me\b|\bi\s+(want|need)\b|\bsend\s+me\b|\bkeep\s+me\s+posted\b|\bbring\s+back\b/i;
 const OFF = /\b(turn|switch|put|flip)\b[\w\s]{0,24}?\boff\b|\b(disable|deactivate|stop|pause|mute|silence|quiet|shut)\b|\boff\s+am\b|\bno\s+more\b|\bdon'?t\s+(send|alert|ping|notify)\b|\bleave\s+me\s+alone\b|\btoo\s+many\b|\benough\b/i;
@@ -34,6 +39,22 @@ function dollars(text: string): number | null {
   return (m[2] ?? m[4]) ? n * 1000 : n;
 }
 
+/** Every amount in the message, with k/m suffixes: "20k-150k" → [20000, 150000]. */
+export function amounts(text: string): number[] {
+  const out: number[] = [];
+  for (const m of text.matchAll(/\$?\s*(\d+(?:[.,]\d+)?)\s*(k|m|mil|million|thousand)?\b/gi)) {
+    let n = Number(m[1]!.replace(",", "."));
+    const u = (m[2] ?? "").toLowerCase();
+    if (u === "k" || u === "thousand") n *= 1_000;
+    else if (u) n *= 1_000_000;
+    if (Number.isFinite(n) && n > 0) out.push(n);
+  }
+  return out;
+}
+
+const MCAP = /\bm(arket)?\s?caps?\b|\bmc\b/i;
+const LOWCAPS = /\b(low|small|tiny|micro|lower)[\s-]?(caps?|mcaps?|market\s?caps?)\b|\bgems?\b/i;
+
 function chainsIn(text: string): Chain[] {
   const out: Chain[] = [];
   if (/\bsui\b/i.test(text)) out.push("sui");
@@ -46,6 +67,45 @@ export function parseIntent(raw: string): Intent | null {
   const text = raw.trim();
   if (!text || text.length > 200) return null;
   const t = text.toLowerCase();
+
+  // Whole-chain volume: "how much volume is on solana", "sui volume today", "dex volume on both chains"
+  if (/\bvolumes?\b/.test(t) && !/\$[a-z]|\btop\b|\btrending\b|\bleading\b/.test(t)) {
+    const ch = chainsIn(t);
+    if (ch.length || /\b(chains?|network|dex(es)?|overall|whole market|total market)\b/.test(t)) return { action: "chainVolume", chains: ch.length ? ch : undefined };
+  }
+
+  // Find small caps now: "find me low caps on solana under 50k", "any gems on sui?", "show me small caps"
+  if (LOWCAPS.test(t) && !/\b(only send|alerts?|from now on)\b/.test(t)) {
+    const ch = chainsIn(t);
+    const cap = amounts(t.replace(/\b(top\s+)?\d+\s+(tokens?|coins?|of them)\b/g, "")).find((n) => n >= 1_000);
+    return { action: "lowCaps", chains: ch.length ? ch : undefined, maxCap: cap };
+  }
+
+  // Market cap limits for alerts: "only send me tokens under 100k mcap", "mcap between 20k and 150k", "any market cap"
+  // "only send tokens under 100k" means a market cap limit even without the word mcap.
+  const capWithoutWord = /\b(only|just)\b.*\b(tokens?|coins?|ones?)\b.*\b(under|below|less than|over|above|between)\s+\$?\d/.test(t) && !/%|\b(budget|liquidity|volume)\b/.test(t);
+  if (MCAP.test(t) || capWithoutWord) {
+    if (/\b(any|no|remove|clear|reset|drop)\b.*\b(m(arket)?\s?cap|mc)\b.*\b(limit|filter|range)?|\b(m(arket)?\s?cap|mc)\b.*\b(off|limit off|any)\b/.test(t) && !/\d/.test(t)) {
+      return { action: "mcap", min: null, max: null };
+    }
+    const n = amounts(t);
+    if (n.length >= 2 && /\b(between|from|to|and)\b|\d\s*k?\s*[-–]\s*\$?\d/.test(t)) {
+      const [lo, hi] = [Math.min(n[0]!, n[1]!), Math.max(n[0]!, n[1]!)];
+      return { action: "mcap", min: lo, max: hi };
+    }
+    if (n.length === 1 && /\b(nothing|none|no|not)\s+(above|over|bigger|higher|more)\b/.test(t)) return { action: "mcap", max: n[0]!, min: null };
+    if (n.length === 1 && /\b(over|above|more than|min(imum)?|at least|bigger than|higher than)\b|>/.test(t)) return { action: "mcap", min: n[0]! };
+    if (n.length === 1 && /\b(under|below|less than|max(imum)?|at most|up to|lower than|cheaper than|not more than|only)\b|</.test(t)) return { action: "mcap", max: n[0]!, min: null };
+  }
+
+  // Skip tokens that already ran: "skip tokens already up 200%", "don't send pumped tokens", "allow pumped coins"
+  if (/\b(pump(ed|s)?|already (up|ran|run|mooned)|ran already|mooned)\b/.test(t) && !/\$[a-z]/.test(t)) {
+    const negated = /\b(skip|filter|no|don'?t|avoid|stop|hide|ignore|cut)\b/.test(t) && !/\b(off|remove|disable|turn off)\b/.test(t);
+    if (!negated && /\b(allow|let|include|show|send)\b.*\bpump|\bpump(ed)?\b.*\b(filter|limit|check)\s+off\b|\b(remove|turn off|disable)\b.*\bpump/.test(t)) return { action: "pump", pct: null };
+    const p = t.match(/(\d{2,5})\s*(%|percent)/);
+    if (p) return { action: "pump", pct: Number(p[1]) };
+    if (/\b(skip|filter|no|don'?t|avoid|stop|hide|ignore|cut)\b/.test(t)) return { action: "pump", pct: 100 };
+  }
 
   // Launch alerts: "turn on launch alerts", "alert me when new tokens launch", "stop the launch pings", "abeg on am for new tokens"
   if (LAUNCH.test(t) && (ON.test(t) || OFF.test(t) || /\blaunch(es)?\s+(alerts?\s+)?(on|off)\b/.test(t))) {

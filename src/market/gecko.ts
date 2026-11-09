@@ -182,6 +182,12 @@ export class Market {
     return [...byAddress.values()];
   }
 
+  /** One page of a chain's newest pools. */
+  async newPools(chain: Chain, page = 1): Promise<Pool[]> {
+    const res = await this.get<{ data: RawPool[] }>(`/networks/${GECKO_NETWORK[chain]}/new_pools?page=${page}`);
+    return res.data.map(normalisePool).filter((p) => p.baseCoinType);
+  }
+
   /**
    * Leading tokens on a chain by 24h volume, one row per token. Pools under a
    * liquidity floor are skipped (they're where the fake +1,000,000% moves

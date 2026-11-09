@@ -5,6 +5,8 @@ import { MIN_OUTCOMES_FOR_TRACK_RECORD, proposeBudget, startOfWeekLagos, suggest
 import { replaySignals } from "./core/history.js";
 import { DEFAULT_LAUNCH_RULES, DEFAULT_SPIKE_RULES, assessRisk, detectLaunch, detectMover, detectSpike, type LaunchRules, type SpikeRules } from "./core/spike.js";
 import { readSafety, type TokenSafety } from "./core/safety.js";
+import { DEFAULT_MAX_PUMP_PCT, capOf, filterMiss, type PickFilters } from "./core/filters.js";
+import type { ChainVolume, ChainVolumes } from "./market/llama.js";
 import type { Pool, RiskCheck, SizingResult, Spike, TokenClass } from "./core/types.js";
 import { NO_REASON, alertMessage, esc, holdingLine, pct, usd, type HoldingView } from "./bot/format.js";
 import type { CoinInfo } from "./chain/sui.js";
@@ -139,6 +141,8 @@ export class Tide {
 
   /** Gap between alerts on the same chain for one user. */
   alertGapMs = 45 * 60_000;
+  /** Whole-chain volume source (DefiLlama). */
+  volumes: ChainVolumes | null = null;
 
   start(userId: number, chatId: number): User {
     this.register(userId);
@@ -318,7 +322,8 @@ export class Tide {
         .filter((p) => !taken.has(p.address))
         .map((p) => detectLaunch(p, this.launchRules[chain] ?? DEFAULT_LAUNCH_RULES))
         .filter((s): s is Spike => s !== null)
-        .sort((a, b) => b.pool.liquidityUsd - a.pool.liquidityUsd);
+        // Earliest first, then smallest cap: the point of a launch alert is being early.
+        .sort((a, b) => (b.pool.createdAt?.getTime() ?? 0) - (a.pool.createdAt?.getTime() ?? 0) || (capOf(a.pool) ?? Infinity) - (capOf(b.pool) ?? Infinity));
       for (const l of launches) taken.add(l.pool.address);
       const movers = pools
         .filter((p) => !taken.has(p.address))
@@ -337,12 +342,14 @@ export class Tide {
       const last = this.store.lastAlertByChain(user.id);
       const seen = this.store.alertedPools(user.id, new Date(now - POOL_COOLDOWN_MS));
       const launchesOn = this.store.getPref(user.id, "launches") === "true";
+      const filters = this.filtersFor(user.id);
       for (const chain of this.chains) {
         if (this.store.getPref(user.id, `mute_chain_${chain}`) === "true") continue;
         const lastAt = last.get(chain);
         if (lastAt && now - lastAt.getTime() < this.alertGapMs) continue;
         const pick = (picks.get(chain) ?? []).find((s) => {
           if (seen.has(s.pool.address)) return false;
+          if (filterMiss(s.pool, filters)) return false;
           if (s.kind === "launch") return launchesOn;
           return this.store.getPref(user.id, `mute_${s.tokenClass}`) !== "true";
         });
@@ -523,6 +530,79 @@ export class Tide {
   }
 
   /** Opt in or out of fresh-launch alerts. */
+  /** This person's market cap range and pump limit. */
+  filtersFor(userId: number): PickFilters {
+    const num = (k: string) => {
+      const v = this.store.getPref(userId, k);
+      return v === null || v === "off" ? null : Number(v);
+    };
+    const pump = this.store.getPref(userId, "max_pump");
+    return {
+      mcapMin: num("mcap_min"),
+      mcapMax: num("mcap_max"),
+      maxPumpPct: pump === null ? DEFAULT_MAX_PUMP_PCT : pump === "off" ? null : Number(pump),
+    };
+  }
+
+  /** Set the market cap range. undefined leaves a side unchanged, null removes it. */
+  setMcap(userId: number, range: { min?: number | null; max?: number | null }): PickFilters {
+    for (const [key, v] of [["mcap_min", range.min], ["mcap_max", range.max]] as const) {
+      if (v === undefined) continue;
+      this.memory.record(userId, { type: "preference", key, value: v === null ? "off" : String(Math.round(v)) });
+    }
+    return this.filtersFor(userId);
+  }
+
+  /** Skip tokens already up more than this % in 24h; null lets them through. */
+  setPumpLimit(userId: number, pct: number | null) {
+    this.memory.record(userId, { type: "preference", key: "max_pump", value: pct === null ? "off" : String(Math.round(pct)) });
+  }
+
+  /**
+   * Small caps with real activity right now: newest and trending pools under
+   * a market cap, with some liquidity and buyers, busiest hour first.
+   */
+  async lowCaps(chains: Chain[] = this.chains, maxCap = 100_000, n = 5): Promise<{ chain: Chain; pools: Pool[]; error?: string }[]> {
+    const out: { chain: Chain; pools: Pool[]; error?: string }[] = [];
+    for (const chain of chains) {
+      try {
+        const [base, more] = await Promise.all([this.market.candidatePools(chain), this.market.newPools(chain, 2).catch(() => [])]);
+        const byToken = new Map<string, Pool>();
+        for (const p of [...base, ...more]) {
+          const cap = capOf(p);
+          if (cap === null || cap > maxCap || cap < 1_000) continue;
+          if (isCash(p.baseCoinType) || p.liquidityUsd < 3_000 || p.txH1.buys < 10) continue;
+          const prev = byToken.get(p.baseCoinType);
+          if (!prev || p.volumeUsd.h1 > prev.volumeUsd.h1) byToken.set(p.baseCoinType, p);
+        }
+        const pools = [...byToken.values()].sort((a, b) => b.volumeUsd.h1 - a.volumeUsd.h1).slice(0, n);
+        out.push({ chain, pools });
+      } catch (err) {
+        out.push({ chain, pools: [], error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return out;
+  }
+
+  /** Whole-chain DEX volume; falls back to summing the top pools if DefiLlama is down. */
+  async chainVolume(chains: Chain[] = this.chains): Promise<({ chain: Chain } & ({ volume: ChainVolume } | { approxUsd: number } | { error: string }))[]> {
+    const out: ({ chain: Chain } & ({ volume: ChainVolume } | { approxUsd: number } | { error: string }))[] = [];
+    for (const chain of chains) {
+      try {
+        if (!this.volumes) throw new Error("no volume source");
+        out.push({ chain, volume: await this.volumes.get(chain) });
+      } catch {
+        try {
+          const top = await this.market.topTokens(chain, 20, isCash, {});
+          out.push({ chain, approxUsd: top.reduce((s, p) => s + p.volumeUsd.h24, 0) });
+        } catch (err) {
+          out.push({ chain, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+    }
+    return out;
+  }
+
   setLaunches(userId: number, on: boolean) {
     this.memory.record(userId, { type: "preference", key: "launches", value: on ? "true" : "false" });
   }
