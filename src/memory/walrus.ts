@@ -110,6 +110,12 @@ export class Memory {
       } finally {
         release();
       }
+      // Walrus already holds an event with this id (sent before a restart wiped the local copy):
+      // nothing is missing, so count it as stored instead of failed.
+      if (/idempotency_key was already used|\b409\b/i.test(message)) {
+        this.store.logMemory(event.id, namespace, "confirmed", { error: "already on walrus" });
+        return;
+      }
       // A bad key won't fix itself; anything else (rate limit, timeout, relayer hiccup) gets another go.
       const permanent = /\b(401|403)\b|unauthori[sz]ed|forbidden/i.test(message);
       if (permanent || attempt >= this.retryDelaysMs.length) {

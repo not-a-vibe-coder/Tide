@@ -139,7 +139,7 @@ export class Market {
       headers: { accept: "application/json;version=20230302" },
       signal: AbortSignal.timeout(15_000),
     });
-    if (res.status === 429) throw new Error("rate limited right now (429), tide backs off and retries on its own");
+    if (res.status === 429) return -1; // reachable, just busy for a moment
     if (!res.ok) throw new Error(`GeckoTerminal ${res.status}`);
     const body = (await res.json()) as { data?: unknown[] };
     return body.data?.length ?? 0;

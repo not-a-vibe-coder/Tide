@@ -99,6 +99,7 @@ export async function runChecks(
       : []),
     await check("GeckoTerminal", async () => {
       const n = await market.ping(cfg.CHAINS[0]);
+      if (n < 0) return "reachable, rate limited for a moment (tide waits and retries on its own)";
       const busy = market.queued ? `, ${market.queued} calls queued behind a scan or backfill` : "";
       return `${n} trending ${cfg.CHAINS[0]} pools${busy}`;
     }),

@@ -54,4 +54,13 @@ describe("Walrus writes survive a bad moment", () => {
     await memory.flush();
     expect(store.memoryStats()).toMatchObject({ confirmed: 1, failed: 0 });
   });
+
+  it("counts a write Walrus already has as stored, not failed", async () => {
+    const client = flaky(99, 'Walrus Memory server error (409): {"error":"idempotency_key was already used for a request with different content"}');
+    const { store, memory } = setup(client);
+    memory.record(1, { type: "profile_set", chatId: 1 });
+    await memory.flush();
+    expect(client.calls()).toBe(1);
+    expect(store.memoryStats()).toMatchObject({ confirmed: 1, failed: 0 });
+  });
 });
