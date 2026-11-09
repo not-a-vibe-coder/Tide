@@ -19,7 +19,9 @@ import type { Store } from "./store.js";
 const WRITE_SLOTS = 2;
 /** Most results one Walrus recall returns. */
 const RECALL_LIMIT = 100;
-const RECALL_TIMEOUT_MS = 20_000;
+const RECALL_TIMEOUT_MS = 60_000;
+/** Walrus slows down when hit with many searches at once, so restores ask two at a time. */
+const RECALL_SLOTS = 2;
 
 /** Narrower search phrases for event types with more than one recall's worth of memories. */
 export function recallHints(now = new Date()): string[] {
@@ -55,6 +57,10 @@ export class Memory {
   lastCapped: { namespace: string; types: EventType[] }[] = [];
   /** How long one recall may take before it's skipped. */
   recallTimeoutMs = RECALL_TIMEOUT_MS;
+  /** Searches during the current restore that failed, and the last reason. */
+  recallStats = { ok: 0, failed: 0, lastError: "" };
+  private recallActive = 0;
+  private recallWaiters: (() => void)[] = [];
 
   constructor(
     private readonly store: Store,
@@ -160,16 +166,24 @@ export class Memory {
   /** One recall with a time limit, so a slow search can't stall a restore. */
   private async recallSafe(namespace: string, query: string): Promise<string[]> {
     if (!this.client) return [];
+    while (this.recallActive >= RECALL_SLOTS) await new Promise<void>((r) => this.recallWaiters.push(r));
+    this.recallActive++;
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error("recall timed out")), this.recallTimeoutMs)));
     try {
       const res = await Promise.race([this.client.recall({ query, limit: RECALL_LIMIT, namespace }), timeout]);
+      this.recallStats.ok++;
       return res.results.map((m) => m.text);
     } catch (err) {
-      log.debug(`recall "${query}" in ${namespace} failed: ${err instanceof Error ? err.message : err}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      this.recallStats.failed++;
+      this.recallStats.lastError = msg;
+      log.warn(`recall "${query}" in ${namespace} failed: ${msg}`);
       return [];
     } finally {
       clearTimeout(timer);
+      this.recallActive--;
+      this.recallWaiters.shift()?.();
     }
   }
 

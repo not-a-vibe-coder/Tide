@@ -123,10 +123,12 @@ async function main() {
     try {
       const restored = await tide.restore(cfg.ADMIN_TELEGRAM_IDS);
       const took = () => Math.round((Date.now() - t0) / 1000);
-      tide.restoreStatus = `${restored} users back at ${clock()} (${took()}s), filling in older history…`;
+      tide.restoreStatus = `${restored} users back at ${clock()} (${took()}s, ${memory.recallStats.failed} searches failed), filling in older history…`;
       log.info(`restored ${restored} users from Walrus Memory in ${took()}s`);
       const more = await tide.restoreDeep();
-      tide.restoreStatus = `done at ${clock()} in ${took()}s: ${restored} users, ${store.outcomeSources().history} history outcomes (${more} from the deep search)`;
+      const r = memory.recallStats;
+      const searches = r.failed ? `, ${r.failed} of ${r.ok + r.failed} searches failed (${r.lastError.slice(0, 100)})` : `, ${r.ok} searches ok`;
+      tide.restoreStatus = `done at ${clock()} in ${took()}s: ${restored} users, ${store.outcomeSources().history} history outcomes (${more} from the deep search)${searches}`;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       tide.restoreStatus = `failed at ${clock()}: ${msg.slice(0, 120)}`;
