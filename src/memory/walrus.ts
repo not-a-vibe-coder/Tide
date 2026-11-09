@@ -172,7 +172,10 @@ export class Memory {
     for (const type of EVENT_TYPES) {
       const first = await ask(type, `[tide:${type}]`);
       if (!first.full) continue;
-      for (const hint of recallHints()) await ask(type, `[tide:${type}] ${hint}`);
+      const hints = recallHints();
+      for (let i = 0; i < hints.length; i += 6) {
+        await Promise.all(hints.slice(i, i + 6).map((h) => ask(type, `[tide:${type}] ${h}`).catch(() => null)));
+      }
     }
     return [...seen.values()].sort((a, b) => a.at.localeCompare(b.at));
   }
@@ -205,7 +208,7 @@ export class Memory {
     await this.flush();
     const namespaces = [SHARED_NAMESPACE, ...userIds.map(userNamespace)];
     const fetched = new Map<string, TideEvent[]>();
-    for (const ns of namespaces) fetched.set(ns, await this.fetchNamespace(ns));
+    await Promise.all(namespaces.map(async (ns) => fetched.set(ns, await this.fetchNamespace(ns))));
 
     // Merge with what's already local (things done since this server started, and writes Walrus
     // hasn't indexed yet), then replay everything in time order so the latest change wins.

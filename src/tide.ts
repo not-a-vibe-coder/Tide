@@ -161,6 +161,9 @@ export class Tide {
    * After a restart with an empty cache (Render's free plan wipes the disk on
    * every deploy), pull every known user back from Walrus Memory.
    */
+  /** Last restore from Walrus, for the admin storage line. */
+  restoreStatus = "not run yet";
+
   async restore(adminIds: number[]): Promise<number> {
     // Always runs at startup, even if someone already messaged the new server: their fresh
     // record is merged with their history instead of hiding it.
@@ -715,8 +718,9 @@ export class Tide {
     const s = this.store.memoryStats();
     const src = this.store.outcomeSources();
     const top = s.failed ? this.store.topFailure() : null;
+    const restored = `; restore: ${this.restoreStatus}`;
     const why = top ? ` (mostly: ${top.error.slice(0, 120)}; retried every 30 min)` : "";
-    return `${this.memory.isDryRun ? "dry run" : "mainnet"}, ${s.confirmed} writes confirmed, ${s.queued} in flight, ${s.failed} failed${why}${s.dry_run ? `, ${s.dry_run} dry run` : ""}; shared outcomes: ${src.live} live, ${src.history} history`;
+    return `${this.memory.isDryRun ? "dry run" : "mainnet"}, ${s.confirmed} writes confirmed, ${s.queued} in flight, ${s.failed} failed${why}${s.dry_run ? `, ${s.dry_run} dry run` : ""}; shared outcomes: ${src.live} live, ${src.history} history${restored}`;
   }
 }
 

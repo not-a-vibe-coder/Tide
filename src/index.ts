@@ -117,11 +117,18 @@ async function main() {
   // Render's free plan wipes the disk on every deploy: pull users back from Walrus first,
   // then backfill history only if shared memory is still thin.
   void (async () => {
+    const t0 = Date.now();
+    const clock = () => new Date().toLocaleTimeString("en-GB", { timeZone: "Africa/Lagos", hour: "2-digit", minute: "2-digit" });
+    tide.restoreStatus = `running since ${clock()}`;
     try {
       const restored = await tide.restore(cfg.ADMIN_TELEGRAM_IDS);
-      if (restored) log.info(`restored ${restored} users from Walrus Memory`);
+      const took = Math.round((Date.now() - t0) / 1000);
+      tide.restoreStatus = `done at ${clock()} in ${took}s, ${restored} users, ${store.outcomeSources().history} history outcomes`;
+      log.info(`restored ${restored} users from Walrus Memory in ${took}s`);
     } catch (err) {
-      log.warn("restore from Walrus failed:", err instanceof Error ? err.message : err);
+      const msg = err instanceof Error ? err.message : String(err);
+      tide.restoreStatus = `failed at ${clock()}: ${msg.slice(0, 120)}`;
+      log.warn("restore from Walrus failed:", msg);
     }
     const shared = store.outcomeSources();
     if (shared.history + shared.live < 20) setTimeout(backfill, 60_000);
