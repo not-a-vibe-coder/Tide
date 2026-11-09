@@ -207,8 +207,13 @@ export class Memory {
     const fetched = new Map<string, TideEvent[]>();
     for (const ns of namespaces) fetched.set(ns, await this.fetchNamespace(ns));
 
+    // Merge with what's already local (things done since this server started, and writes Walrus
+    // hasn't indexed yet), then replay everything in time order so the latest change wins.
+    const byId = new Map<string, TideEvent>();
+    for (const e of [...fetched.values()].flat()) byId.set(e.id, e);
+    for (const e of this.store.allEvents()) if (!byId.has(e.id)) byId.set(e.id, e);
+    const all = [...byId.values()].sort((a, b) => a.at.localeCompare(b.at));
     this.store.wipeDerived();
-    const all = [...fetched.values()].flat().sort((a, b) => a.at.localeCompare(b.at));
     for (const e of all) this.store.apply(e);
 
     // Buys still missing a reason go back in the question queue.

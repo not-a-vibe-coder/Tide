@@ -376,6 +376,11 @@ export class Store {
     return rows.map((r) => (JSON.parse(r.json) as { data: { telegramId: number } }).data.telegramId);
   }
 
+  /** Every event in the local cache, including ones not on Walrus yet. */
+  allEvents(): TideEvent[] {
+    return (this.db.prepare("SELECT json FROM events").all() as { json: string }[]).map((r) => JSON.parse(r.json) as TideEvent);
+  }
+
   allUserIds(): number[] {
     return (this.db.prepare("SELECT id FROM users").all() as { id: number }[]).map((r) => r.id);
   }

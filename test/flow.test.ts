@@ -152,7 +152,21 @@ describe("Tide end to end", () => {
     expect(await tide.restore([])).toBe(2);
     expect(store.getUser(USER)!.budgetUsd).toBe(25);
     expect(store.getPref(USER, "launches")).toBe("true");
-    expect(await tide.restore([])).toBe(0); // only runs on an empty cache
+  });
+
+  it("still restores someone who messages the new server before the restore runs", async () => {
+    const { tide, store, memory } = setup();
+    tide.start(USER, USER);
+    await tide.setWallet(USER, "0x" + "1".repeat(64));
+    tide.setLaunches(USER, true);
+    await memory.flush();
+    store.wipeDerived(); // redeploy
+
+    tide.start(USER, USER); // they hit /start a minute after the deploy
+    expect(store.getUser(USER)!.wallet).toBeNull();
+    expect(await tide.restore([])).toBe(1);
+    expect(store.getUser(USER)!.wallet).toBe("0x" + "1".repeat(64));
+    expect(store.getPref(USER, "launches")).toBe("true");
   });
 
   it("closes a position when the coin leaves the wallet", async () => {

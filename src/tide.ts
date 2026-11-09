@@ -162,9 +162,10 @@ export class Tide {
    * every deploy), pull every known user back from Walrus Memory.
    */
   async restore(adminIds: number[]): Promise<number> {
-    if (this.store.allUserIds().length > 0) return 0;
+    // Always runs at startup, even if someone already messaged the new server: their fresh
+    // record is merged with their history instead of hiding it.
     const shared = await this.memory.fetchNamespace(SHARED_NAMESPACE);
-    const ids = new Set<number>(adminIds);
+    const ids = new Set<number>([...adminIds, ...this.store.allUserIds()]);
     for (const e of shared) if (e.data.type === "user_joined") ids.add(e.data.telegramId);
     if (ids.size === 0) return 0;
     await this.memory.rebuild([...ids]);
