@@ -9,7 +9,7 @@ import type { Market } from "../market/gecko.js";
 import type { Store } from "../memory/store.js";
 import type { Memory } from "../memory/walrus.js";
 import { cleanReply } from "./clean.js";
-import { describeToken, extractMentions, pickPool } from "./lookup.js";
+import { KNOWN_TOKENS, describeToken, extractMentions, pickPool } from "./lookup.js";
 import type { ChatMessage, Llm } from "./llm.js";
 import { systemPrompt } from "./persona.js";
 
@@ -175,7 +175,9 @@ export class Companion {
         if (m.kind === "token") {
           pool = (await this.market.tokenPools(m.token))[0] ?? null;
         } else {
-          ({ best: pool, others } = pickPool(m.query, await this.market.search(m.query)));
+          const known = KNOWN_TOKENS[m.query.replace(/^\$/, "").toUpperCase()];
+          if (known) pool = (await this.market.tokenPools(known).catch(() => []))[0] ?? null;
+          if (!pool) ({ best: pool, others } = pickPool(m.query, await this.market.search(m.query)));
         }
         if (!pool) {
           out.push(`- I looked for "${m.kind === "token" ? m.label : m.query}" on sui and solana and found no trading pool. Say so, don't guess.`);

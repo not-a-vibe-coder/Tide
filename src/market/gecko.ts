@@ -75,7 +75,8 @@ export function normalisePool(raw: RawPool): Pool {
     marketCapUsd: numOrNull(a.market_cap_usd),
     fdvUsd: numOrNull(a.fdv_usd),
     liquidityUsd: num(a.reserve_in_usd),
-    createdAt: a.pool_created_at ? new Date(a.pool_created_at) : null,
+    // Some pools report no date, or one before Sui and Solana pools existed: treat both as unknown.
+    createdAt: a.pool_created_at && Date.parse(a.pool_created_at) > Date.parse("2020-03-01") ? new Date(a.pool_created_at) : null,
     volumeUsd: { m5: num(a.volume_usd?.m5), h1: num(a.volume_usd?.h1), h6: num(a.volume_usd?.h6), h24: num(a.volume_usd?.h24) },
     priceChangePct: {
       m5: num(a.price_change_percentage?.m5),
@@ -314,12 +315,14 @@ export class Market {
 
   /** Search pools by ticker or name on the given chains, most liquid first. */
   async search(query: string, chains: Chain[] = CHAINS): Promise<Pool[]> {
-    // One call across every network, then keep only the chains Tide covers.
-    const res = await this.get<{ data: RawPool[] }>(`/search/pools?query=${encodeURIComponent(query)}&page=1`);
-    const wanted = chains.map((c) => `${GECKO_NETWORK[c]}_`);
-    return res.data
-      .filter((r) => wanted.some((w) => (r.relationships?.base_token?.data?.id ?? "").startsWith(w)))
-      .map(normalisePool)
-      .sort((a, b) => b.liquidityUsd - a.liquidityUsd);
+    // One search per chain: a search across every network fills its first page with other
+    // chains' pools, which can leave only a copycat on Sui or Solana.
+    const out: Pool[] = [];
+    for (const chain of chains) {
+      const res = await this.get<{ data: RawPool[] }>(`/search/pools?query=${encodeURIComponent(query)}&network=${GECKO_NETWORK[chain]}&page=1`).catch(() => ({ data: [] as RawPool[] }));
+      const prefix = `${GECKO_NETWORK[chain]}_`;
+      out.push(...res.data.filter((r) => (r.relationships?.base_token?.data?.id ?? "").startsWith(prefix)).map(normalisePool));
+    }
+    return out.sort((a, b) => b.liquidityUsd - a.liquidityUsd);
   }
 }

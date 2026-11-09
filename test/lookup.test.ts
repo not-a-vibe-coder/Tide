@@ -113,3 +113,11 @@ describe("voice enforcement", () => {
     expect(enforceVoice("SCOOP is up. WIF on Solana looks thin.")).toBe("SCOOP is up. WIF on solana looks thin.");
   });
 });
+
+describe("known tickers", () => {
+  it("pins the real mint for big tickers, so copycats don't win", async () => {
+    const { KNOWN_TOKENS } = await import("../src/ai/lookup.js");
+    expect(KNOWN_TOKENS.WIF).toBe("EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm");
+    expect(KNOWN_TOKENS.SUI).toBe("0x2::sui::SUI");
+  });
+});

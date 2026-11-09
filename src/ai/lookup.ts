@@ -57,6 +57,26 @@ export function extractMentions(text: string, known: { symbol: string; token: st
 }
 
 /** Best pool for a ticker search: exact symbol matches first, then the most liquid. */
+/**
+ * The real token behind well-known tickers. Copycats reuse these tickers all the time, so a
+ * "$WIF" question goes straight to the real mint instead of whichever WIF pool a search finds.
+ */
+export const KNOWN_TOKENS: Record<string, string> = {
+  SOL: "So11111111111111111111111111111111111111112",
+  WIF: "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",
+  BONK: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+  JUP: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+  POPCAT: "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr",
+  JTO: "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL",
+  PYTH: "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3",
+  RAY: "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",
+  TRUMP: "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN",
+  SUI: "0x2::sui::SUI",
+  DEEP: "0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP",
+  CETUS: "0x06864a6f921804860930db6ddbe2e16acdf8504495ea7481637a1c8b9a8fe54b::cetus::CETUS",
+  WAL: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL",
+};
+
 export function pickPool(query: string, pools: Pool[]): { best: Pool | null; others: number } {
   const exact = pools.filter((p) => p.baseSymbol.toUpperCase() === query.toUpperCase());
   const ranked = (exact.length ? exact : pools).slice().sort((a, b) => b.liquidityUsd - a.liquidityUsd);

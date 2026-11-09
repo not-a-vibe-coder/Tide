@@ -48,7 +48,7 @@ describe("Market rate limiting", () => {
 describe("Market search", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("searches once and keeps only Sui and Solana pools", async () => {
+  it("searches each chain on its own and keeps only that chain's pools", async () => {
     const mk = (id: string, liq: string) => {
       const r = structuredClone(rawGeckoPool) as any;
       r.relationships.base_token.data.id = id;
@@ -67,7 +67,10 @@ describe("Market search", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
     const pools = await new Market("https://x", 0).search("wif");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const urls = fetchMock.mock.calls.map((c: any[]) => String(c[0]));
+    expect(urls.some((u) => u.includes("network=solana"))).toBe(true);
+    expect(urls.some((u) => u.includes("network=sui-network"))).toBe(true);
     expect(pools.map((p) => p.chain)).toEqual(["solana", "sui"]);
   });
 });
