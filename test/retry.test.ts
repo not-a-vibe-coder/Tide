@@ -64,3 +64,34 @@ describe("Walrus writes survive a bad moment", () => {
     expect(store.memoryStats()).toMatchObject({ confirmed: 1, failed: 0 });
   });
 });
+
+describe("pulling memory back from Walrus", () => {
+  it("gets past the 100-per-search cap with narrower searches", async () => {
+    const { encodeEvent, newEvent, SHARED_NAMESPACE } = await import("../src/memory/events.js");
+    // 260 history outcomes over 10 days; the fake relayer returns at most 100 matching every word of the query.
+    const texts = Array.from({ length: 260 }, (_, i) =>
+      encodeEvent(
+        newEvent(null, {
+          type: "token_outcome",
+          coinType: `0x${i}::t::T`,
+          symbol: `T${i}`,
+          tokenClass: i % 2 ? "new" : "established",
+          changePct: (i % 7) * 10 - 30,
+          source: "history",
+          signalAt: new Date(Date.parse("2026-11-08T12:00:00Z") - (i % 10) * 86_400_000).toISOString(),
+          kind: i % 3 ? "spike" : "launch",
+        }),
+      ),
+    );
+    const client = {
+      recall: async ({ query, limit }: { query: string; limit: number }) => {
+        const words = query.split(" ").filter(Boolean);
+        return { results: texts.filter((t) => words.every((w) => t.includes(w))).slice(0, limit).map((text) => ({ text })) };
+      },
+    } as unknown as MemoryClient;
+    const store = new Store(":memory:");
+    const memory = new Memory(store, { privateKey: "", accountId: "", serverUrl: "", dryRun: false, client }, [1]);
+    const events = await memory.fetchNamespace(SHARED_NAMESPACE);
+    expect(events).toHaveLength(260);
+  });
+});

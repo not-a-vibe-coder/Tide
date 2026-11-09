@@ -16,6 +16,16 @@ import type { Store } from "./store.js";
 
 /** Parallel writes to the Walrus relayer. Keeps a big batch (like a history backfill) from tripping rate limits. */
 const WRITE_SLOTS = 2;
+/** Most results one Walrus recall returns. */
+const RECALL_LIMIT = 100;
+
+/** Narrower search phrases for event types with more than one recall's worth of memories. */
+export function recallHints(now = new Date()): string[] {
+  const words = ["new token", "established token", "spike signal", "launch signal", "mover", "live alert", "Market history", "moved -", "moved 1", "moved 2", "moved 5", "sui", "solana"];
+  const days: string[] = [];
+  for (let i = 0; i < 45; i++) days.push(new Date(now.getTime() - i * 86_400_000).toISOString().slice(0, 10));
+  return [...words, ...days];
+}
 /** Waits before each retry of a failed write. The idempotency key makes a retry safe if the first try landed. */
 const RETRY_DELAYS_MS = [5_000, 20_000, 60_000];
 
@@ -144,13 +154,25 @@ export class Memory {
   async fetchNamespace(namespace: string): Promise<TideEvent[]> {
     if (!this.client) return [];
     const seen = new Map<string, TideEvent>();
-    // Recall is similarity search capped at 100 per call, so ask once per event type.
-    for (const type of EVENT_TYPES) {
-      const res = await this.client.recall({ query: `[tide:${type}]`, limit: 100, namespace });
+    // Recall is similarity search capped at 100 per call. Ask once per event type, and when a
+    // type fills the cap, ask again with narrower hints (class, kind, chain, recent dates).
+    // Only full types pay for the extra searches, and only on a restore.
+    const ask = async (type: string, query: string) => {
+      const res = await this.client!.recall({ query, limit: RECALL_LIMIT, namespace });
+      let added = 0;
       for (const m of res.results) {
         const e = decodeEvent(m.text);
-        if (e && e.data.type === type) seen.set(e.id, e);
+        if (e && e.data.type === type && !seen.has(e.id)) {
+          seen.set(e.id, e);
+          added++;
+        }
       }
+      return { full: res.results.length >= RECALL_LIMIT, added };
+    };
+    for (const type of EVENT_TYPES) {
+      const first = await ask(type, `[tide:${type}]`);
+      if (!first.full) continue;
+      for (const hint of recallHints()) await ask(type, `[tide:${type}] ${hint}`);
     }
     return [...seen.values()].sort((a, b) => a.at.localeCompare(b.at));
   }
