@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tide Blog</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="How Tide finds Sui and Solana tokens as they move, uses Tatum for on-chain reads and Walrus Memory to remember every call, and learns from its results.">
+<link rel="icon" type="image/png" href="/assets/favicon.png">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<meta name="theme-color" content="#091618">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Tide: a trading friend that remembers every call">
+<meta property="og:description" content="A Telegram trading friend for Sui and Solana that reads the red flags, sizes every alert, and remembers every call on Walrus.">
+<meta property="og:image" content="https://raw.githubusercontent.com/not-a-vibe-coder/Tide/main/web/assets/og.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://raw.githubusercontent.com/not-a-vibe-coder/Tide/main/web/assets/og.jpg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=Inter:wght@100..900&family=JetBrains+Mono:wght@100..800&display=swap">
+<style>
+:root{
+  --page:#091618; --deep:#0b2224; --ink:#f2fbf8; --body:#c9dcd8; --grey:#87999a;
+  --line:rgba(255,255,255,.1); --foam:#7aeed6; --glow:#16c6a4;
+  --sans:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --wide:"Archivo",system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:var(--page);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+body{background:var(--page);color:var(--body);font-family:var(--sans);font-size:18px;line-height:1.7;
+  padding-left:max(20px, env(safe-area-inset-left,0px));padding-right:max(20px, env(safe-area-inset-right,0px))}
+a{color:var(--ink)}
+:focus-visible{outline:1px solid var(--foam);outline-offset:3px}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:var(--page);z-index:10}
+
+/* soft tide glow behind the hero */
+.glow{position:absolute;inset:0 0 auto;height:720px;pointer-events:none;z-index:-1;
+  background:radial-gradient(60% 55% at 70% 10%, rgba(22,198,164,.28), transparent 70%),radial-gradient(45% 40% at 10% 0%, rgba(122,238,214,.12), transparent 70%)}
+
+.nav{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;display:flex;align-items:center;justify-content:space-between;
+  max-width:1120px;margin:0 auto;padding-block:18px;background:linear-gradient(var(--page) 60%, transparent)}
+.mark{display:flex;align-items:center;gap:9px;font-family:var(--wide);font-weight:800;font-size:16px;color:var(--ink);text-decoration:none;letter-spacing:-.01em}
+.mark img{width:24px;height:24px;border-radius:50%;box-shadow:0 0 12px rgba(22,198,164,.35)}
+.links{display:flex;gap:28px;font-family:var(--mono);font-size:13px;letter-spacing:.04em}
+.links a{text-decoration:none;color:var(--body)}
+.links a:hover{color:var(--ink)}
+
+header.hero{max-width:1120px;margin:56px auto 0;display:grid;gap:22px}
+.kicker{font-family:var(--mono);font-size:13px;color:var(--foam);letter-spacing:.06em;text-transform:uppercase}
+h1{font-family:var(--wide);font-weight:800;font-stretch:112%;color:var(--ink);font-size:clamp(34px,6.4vw,78px);line-height:1.02;letter-spacing:-.015em;text-transform:uppercase;max-width:16ch;text-wrap:balance}
+.meta{display:flex;flex-wrap:wrap;gap:8px 22px;font-family:var(--mono);font-size:13px;color:var(--grey)}
+.meta a{color:var(--grey)}
+.cover{max-width:1120px;margin:40px auto 0;border-radius:22px;overflow:hidden;border:1px solid rgba(122,238,214,.18);box-shadow:0 40px 120px rgba(0,0,0,.5),0 0 80px rgba(22,198,164,.12)}
+.cover img{display:block;width:100%;height:auto;aspect-ratio:21/9;object-fit:cover;max-width:100%}
+
+.quick{max-width:1120px;margin:22px auto 0;display:flex;flex-wrap:wrap;gap:10px}
+.pill{display:inline-flex;align-items:center;gap:8px;padding:9px 16px;border-radius:999px;border:1px solid rgba(255,255,255,.18);font-family:var(--mono);font-size:13px;color:var(--ink);text-decoration:none;background:rgba(255,255,255,.03)}
+.pill:hover{border-color:var(--foam)}
+.pill.solid{background:var(--ink);color:var(--page);border-color:var(--ink);font-family:var(--wide);font-weight:800;font-size:14px}
+.pill svg{width:15px;height:15px}
+
+article{max-width:700px;margin:64px auto 0;min-width:0}
+article > *{min-width:0}
+article h2{font-family:var(--wide);font-weight:800;font-stretch:108%;color:var(--ink);font-size:clamp(24px,3.2vw,32px);line-height:1.15;letter-spacing:-.01em;margin:64px 0 16px;text-wrap:balance}
+article h2::before{content:"";display:block;width:36px;height:2px;background:var(--foam);margin-bottom:18px;box-shadow:0 0 12px var(--glow)}
+article p{margin:0 0 20px}
+article strong{color:var(--ink);font-weight:600}
+article em{color:var(--grey)}
+article ul,article ol{margin:0 0 22px 1.2em;display:grid;gap:10px}
+article li::marker{color:var(--foam)}
+article a{text-decoration-color:rgba(122,238,214,.5);text-underline-offset:3px}
+article a:hover{color:var(--foam)}
+article hr{border:0;border-top:1px solid var(--line);margin:48px 0}
+article code{font-family:var(--mono);font-size:.84em;color:#d9faf2;background:rgba(122,238,214,.08);border:1px solid rgba(122,238,214,.14);padding:1px 6px;border-radius:6px;overflow-wrap:anywhere}
+article pre{margin:0 0 24px;padding:18px 20px;border-radius:14px;background:var(--deep);border:1px solid rgba(122,238,214,.16);overflow-x:auto}
+article pre code{background:none;border:0;padding:0;font-size:15px;color:var(--foam);overflow-wrap:normal}
+figure{margin:28px 0 32px}
+figure img{display:block;max-width:100%;height:auto;margin:0 auto;border-radius:16px;border:1px solid var(--line);box-shadow:0 24px 70px rgba(0,0,0,.45)}
+li figure{margin:16px 0}
+.tw{overflow-x:auto;margin:0 0 26px;border:1px solid var(--line);border-radius:14px}
+table{border-collapse:collapse;width:100%;font-size:15px;min-width:520px}
+th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-family:var(--mono);font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--grey);font-weight:500;background:rgba(255,255,255,.02)}
+tr:last-child td{border-bottom:0}
+
+.end{max-width:1120px;margin:96px auto 0;padding:40px 0 calc(48px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:24px;align-items:center;justify-content:space-between}
+.end h3{font-family:var(--wide);font-weight:800;font-stretch:110%;font-size:clamp(22px,3vw,30px);color:var(--ink);text-transform:uppercase;line-height:1.05}
+.end .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.soon{font-family:var(--mono);font-size:13px;color:var(--grey);display:inline-flex;align-items:center;gap:8px}
+.soon b{width:7px;height:7px;border-radius:50%;background:var(--foam);box-shadow:0 0 8px var(--glow)}
+
+@media (max-width:640px){
+  body{font-size:17px}
+  .links{gap:18px;font-size:12px}
+  .links .opt{display:none}
+  header.hero{margin-top:28px}
+  .cover{margin-top:28px;border-radius:16px}
+  article{margin-top:44px}
+  article h2{margin-top:48px}
+}
+</style>
+</head>
+<body>
+<div class="glow" aria-hidden="true"></div>
+<header class="nav">
+  <a class="mark" href="/"><img src="/assets/favicon.png" alt="">TIDE</a>
+  <nav class="links" aria-label="Main">
+    <a href="/">HOME</a>
+    <a class="opt" href="https://github.com/not-a-vibe-coder/Tide" target="_blank" rel="noopener">GITHUB</a>
+    <a href="https://t.me/usetidebot" target="_blank" rel="noopener">OPEN BOT</a>
+  </nav>
+</header>
+
+<header class="hero">
+  <span class="kicker">Walrus × Tatum · Total Recall</span>
+  <h1>Tide: a trading friend that remembers every call</h1>
+  <div class="meta"><span>by <a href="https://x.com/jackdotsol" target="_blank" rel="noopener">Pascal Chukwu</a></span><span>November 2026</span><span>8 min read</span></div>
+</header>
+<div class="cover"><img src="/assets/tide-wordmark.jpg" alt="The word tide in glossy teal glass"></div>
+<div class="quick">
+  <a class="pill solid" href="https://t.me/usetidebot" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21.9 4.3 18.7 19.5c-.2 1.1-.9 1.4-1.8.9l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.3-5 9.1-8.2c.4-.4-.1-.6-.6-.2L6.2 13.3l-4.8-1.5c-1-.3-1.1-1 .2-1.5l18.9-7.3c.9-.3 1.6.2 1.4 1.3z"/></svg>Try @usetidebot</a>
+  <a class="pill" href="https://github.com/not-a-vibe-coder/Tide" target="_blank" rel="noopener">Read the code</a>
+</div>
+
+<article>
+<h2>The problem</h2>
+<p>Every memecoin trader knows the loop. A token starts moving, you see it late, you ape in without checking anything, it dumps, and a week later you do the exact same thing again. Not because you didn't learn, but because nothing you used remembered.</p>
+<p>Alert bots are fast but forgetful. They shout about every pump, never tell you what could go wrong, and treat your tenth bad call exactly like your first. I wanted the opposite: something that watches the market with you, tells you the red flags first, and <strong>gets stricter with you when your calls go bad</strong>, because it actually remembers them.</p>
+<p>That's Tide.</p>
+<h2>What Tide does</h2>
+<p>Tide is a Telegram bot for Sui and Solana. You talk to it like a friend, in plain words (pidgin works too).</p>
+<figure><img src="/assets/blog/welcome.jpg" alt="welcome" loading="lazy"></figure>
+<ul>
+<li><strong>Finds tokens as they start moving.</strong> Every 5 minutes it scans trending and brand-new pools on both chains and sends at most one pick per chain every 45 minutes: a real volume spike first, then a fresh launch if you opted in, otherwise the strongest steady climber.</li>
+<li><strong>Reads the red flags first.</strong> Thin liquidity, pools that are hours old, more sellers than buyers, a valuation 100× bigger than the liquidity under it, buys coming from a handful of wallets, and on Solana, live <strong>mint or freeze authority</strong> read straight from the chain.</li>
+<li><strong>Tells you how much it would risk.</strong> You set a weekly budget. Every alert comes with a maximum size, and the maths is shown: <code>budget left × share × your track record × risk</code>.</li>
+<li><strong>Remembers why you bought.</strong> When a new token lands in your wallet, Tide asks why. Later it holds you to that reason and reports P&amp;L against it.</li>
+<li><strong>Answers questions.</strong> "why shouldn't i buy $BONK?", "top 5 on solana", "find me low caps under 50k", "how much volume is on sui".</li>
+<li><strong>Lets you set the rules.</strong> "only send tokens under 100k mcap", "skip tokens already up 200%", "only solana alerts", "turn on launch alerts".</li>
+</ul>
+<figure><img src="/assets/blog/alerts.jpg" alt="alerts" loading="lazy"></figure>
+<p>Look at the JLP alert above. The token has a $763M valuation and $1.8M of liquidity, mint and freeze authority are both still on, and 773 buys came from only 119 wallets. Tide still sends it, because it really is moving, but sizes it at <strong>$0.62</strong> out of a $20 week. The launch alert below it gets $1.90, because Tide has no bad results on launches from me yet.</p>
+<p>It also works in group chats. Call it by name and it answers in the thread, but anything personal (wallets, bags, budget) gets moved to private.</p>
+<figure><img src="/assets/blog/group.jpg" alt="group" loading="lazy"></figure>
+<h2>How Tide uses Tatum</h2>
+<p>All on-chain reads go through Tatum's RPC gateways.</p>
+<p><strong>Sui, over gRPC.</strong> Tide reads wallet balances through <code>sui-mainnet-grpc.gateway.tatum.io</code> using native gRPC (<code>@protobuf-ts/grpc-transport</code> on <code>@grpc/grpc-js</code>, with the API key in the <code>x-api-key</code> header). Every 30 minutes it snapshots each wallet, diffs it against the last snapshot, and anything new that wasn't paid for with a stablecoin becomes a buy. The first snapshot is only a baseline, so you never get asked about coins you already held. If gRPC ever fails, it falls back to Tatum's Sui JSON-RPC.</p>
+<p><strong>Solana, over JSON-RPC.</strong> <code>solana-mainnet.gateway.tatum.io</code> gives Tide:</p>
+<ul>
+<li><code>getAccountInfo</code> (jsonParsed) for SOL balances and for <strong>token safety</strong>: whether the mint authority and freeze authority are still live, Token-2022 extensions, and transfer fees</li>
+<li><code>getTokenAccountsByOwner</code> for SPL and Token-2022 balances</li>
+<li><code>getTokenLargestAccounts</code> for holder concentration (how much the top wallet and the next 10 own)</li>
+</ul>
+<p>Those safety reads feed straight into the risk multiplier. That's how Tide caught that BONK's freeze authority is still on.</p>
+<p>One thing I learned: Tatum's free plan blocks <code>getBalance</code> on Solana. Instead of failing, Tide tries Tatum first for every method, remembers which ones are blocked for six hours, and only sends those to the public RPC. <code>/doctor</code> shows exactly which method went where.</p>
+<p>Market data (prices, volume, pool ages) comes from GeckoTerminal, and whole-chain DEX volume comes from DefiLlama.</p>
+<figure><img src="/assets/blog/chain-volume.jpg" alt="volume" loading="lazy"></figure>
+<h2>How Tide uses Walrus Memory</h2>
+<p>Tide's memory <strong>is</strong> Walrus. Everything Tide knows about you is written to Walrus Memory on Mainnet as an append-only log of events:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Event</th>
+<th>What it records</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>profile_set</code></td>
+<td>wallets, weekly budget, share per alert</td>
+</tr>
+<tr>
+<td><code>buy_detected</code></td>
+<td>a new token in your wallet, with cost and the price at the time</td>
+</tr>
+<tr>
+<td><code>buy_reason</code></td>
+<td>why you said you bought it</td>
+</tr>
+<tr>
+<td><code>alert_sent</code> / <code>alert_action</code></td>
+<td>each alert, and whether you bought, skipped or muted it</td>
+</tr>
+<tr>
+<td><code>alert_outcome</code></td>
+<td>where that token was 24 hours later</td>
+</tr>
+<tr>
+<td><code>preference</code></td>
+<td>your rules: mcap range, pump limit, chains, launches</td>
+</tr>
+<tr>
+<td><code>token_outcome</code></td>
+<td>shared market memory: how signals like this played out</td>
+</tr>
+<tr>
+<td><code>user_joined</code></td>
+<td>the registry of who uses Tide</td>
+</tr>
+</tbody>
+</table></div>
+<p>Each event is stored as a short readable line plus its JSON, for example <code>[tide:buy_reason] User 42 bought SCOOP because "dex volume rising" ⟨tide⟩ {…}</code>. Every user gets their own namespace (<code>tide-user-&lt;id&gt;</code>), and there's one shared namespace (<code>tide-tokens</code>) for market outcomes everyone learns from. Writes use the event ID as the idempotency key, so retries never create duplicates.</p>
+<p>Tide uses Walrus in three ways:</p>
+<ol>
+<li><strong>As the source of truth.</strong> The bot also keeps a local SQLite cache for speed, but that cache can be thrown away. On startup, Tide pulls every user's events back from Walrus and replays them in time order.</li>
+<li><strong>For semantic recall in chat.</strong> When you ask something, Tide recalls the memories closest to what you said and gives them to the model, the same way a friend remembers what you told them last week.</li>
+<li><strong>As shared learning.</strong> Every 24-hour outcome goes into the shared namespace, so each new user starts from what the market already taught Tide instead of from zero.</li>
+</ol>
+<p>Users never see any of this. Tide just remembers, like a person does.</p>
+<h2>How Tide learned over time</h2>
+<p>This is the part I'm proudest of, because the learning is visible in every alert.</p>
+<p><strong>Day zero: learning from history.</strong> A new bot has no track record, so I made Tide replay the past. It pulls hourly candles for the most active pools on each chain, runs its own spike and launch rules over them, and checks where each signal was 24 hours later. The first run on Sui found 72 signals, and <strong>only 31% were up a day later</strong>. On Solana it found 66, and <strong>41% were up</strong>. That's a sobering number, and it's exactly why Tide sizes small by default. Each result is saved to the shared memory on Walrus.</p>
+<p><strong>Then it learns from everyone.</strong> Every live alert gets checked 24 hours later and joins the same shared memory. Today that memory says established tokens were up a day later on 37 of 92 signals (40%), and brand-new pools on 3 of 8. Every alert quotes this, so you always know the odds Tide is working with.</p>
+<p><strong>Then it learns from you.</strong> Once you have 5 results of your own in a class of token, your own record takes over:</p>
+<pre><code>track record = 0.5 + 0.7 × (your win rate over your last 10)
+</code></pre>
+<p>Before that, it uses the market's record, softened halfway towards 1 so a thin history can't swing too hard.</p>
+<p>Here's what that looks like in practice. My first five alerts on established tokens were all down a day later. So Tide now sizes my established-token alerts at <strong>0.5×</strong>. Brand-new pools have no results from me yet, so they stay at <strong>1×</strong>. Nobody configured that; it learned it from my own calls.</p>
+<figure><img src="/assets/blog/restore-memory.jpg" alt="memory" loading="lazy"></figure>
+<h2>The day the server forgot (and Walrus didn't)</h2>
+<p>Tide runs on Render's free plan, which wipes the server's disk on every deploy. I shipped about fifteen deploys on the last day, and each one gave Tide amnesia. This turned out to be the best real test of the "Total Recall" idea.</p>
+<ul>
+<li><strong>First problem:</strong> after a deploy the bot had no users, so it stopped sending alerts. Fix: on startup, restore everyone from Walrus, using a shared <code>user_joined</code> registry to know whose namespaces to read.</li>
+<li><strong>Second problem:</strong> I sent <code>/start</code> a minute after a deploy, before the restore ran. That created a fresh empty profile, and the restore skipped me because it saw a user already. But when I asked the bot for my wallet, it still answered correctly, because the chat recalls straight from Walrus:</li>
+</ul>
+<figure><img src="/assets/blog/wallet-from-walrus.jpg" alt="wallet from walrus" loading="lazy"></figure>
+<p>Fix: the restore now always runs, and merges whatever happened since boot with the history on Walrus, latest change wins.
+- <strong>Third problem:</strong> Walrus recall returns at most 100 results per search, so big namespaces came back partly. And firing 20 searches at once sometimes made recall time out during decryption (<code>504 … during seal_decrypt</code>). Fix: a two-phase restore. Phase one brings every user back fast with one search per event type, two at a time with a time limit each. Phase two digs past the cap in the background. <code>/doctor</code> now reports exactly how the restore went.
+- <strong>Bonus:</strong> after a wipe, re-sending old events made Walrus answer <code>409 idempotency_key was already used</code>. That's Walrus confirming the memory was already there, so Tide now counts it as stored.</p>
+<p>After all that: deploy, wipe the disk, and Tide comes back knowing my wallet, my $20 budget, my launch alerts, my bad calls, and what the market taught it.</p>
+<h2>What's next</h2>
+<ul>
+<li>A web version (the landing page says "coming soon" for a reason)</li>
+<li>Faster launch detection, so alerts land in the first minutes</li>
+<li>More chains, and tracking sells as well as buys</li>
+</ul>
+<h2>Links</h2>
+<ul>
+<li>Bot: <a href="https://t.me/usetidebot" target="_blank" rel="noopener">t.me/usetidebot</a></li>
+<li>Website: <a href="https://usetidebot.vercel.app" target="_blank" rel="noopener">usetidebot.vercel.app</a></li>
+<li>Code: <a href="https://github.com/not-a-vibe-coder/Tide" target="_blank" rel="noopener">github.com/not-a-vibe-coder/Tide</a></li>
+<li>Built with <a href="https://www.walrus.xyz" target="_blank" rel="noopener">Walrus Memory</a> and <a href="https://tatum.io" target="_blank" rel="noopener">Tatum</a></li>
+</ul>
+<p><em>Nothing Tide says is financial advice. Most new tokens go to zero. Only use money you can lose.</em></p>
+</article>
+
+<footer class="end">
+  <h3>Your trading friend<br>is on Telegram</h3>
+  <div class="row">
+    <a class="pill solid" href="https://t.me/usetidebot" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21.9 4.3 18.7 19.5c-.2 1.1-.9 1.4-1.8.9l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.3-5 9.1-8.2c.4-.4-.1-.6-.6-.2L6.2 13.3l-4.8-1.5c-1-.3-1.1-1 .2-1.5l18.9-7.3c.9-.3 1.6.2 1.4 1.3z"/></svg>Open Tide</a>
+    <span class="soon"><b aria-hidden="true"></b>Web version coming soon</span>
+  </div>
+</footer>
+</body>
+</html>
