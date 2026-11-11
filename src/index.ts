@@ -15,6 +15,9 @@ import { Store } from "./memory/store.js";
 import { Memory } from "./memory/walrus.js";
 import { Tide, type ChainRules, type Readers } from "./tide.js";
 import { ChainVolumes } from "./market/llama.js";
+import { TradeDesk } from "./trade/desk.js";
+import { PumpStream } from "./trade/stream.js";
+import { SolanaTrader } from "./trade/trader.js";
 
 async function main() {
   const cfg = loadConfig();
@@ -58,10 +61,28 @@ async function main() {
   const companion = new Companion(llm, store, memory, market, tide, cfg.CREATOR);
   log.info(`AI chat: ${llm.enabled ? llm.providers.map((p) => `${p.name}/${p.model}`).join(" → ") : "off (templates only)"}`);
 
+  // Trading: a Solana trading wallet per user, derived from TRADE_MASTER_SEED (off without it).
+  const solanaReader = readers.solana as SolanaReader | undefined;
+  const desk =
+    solanaReader && cfg.TRADE_MASTER_SEED
+      ? new TradeDesk(
+          store,
+          memory,
+          new SolanaTrader(solanaReader, { jupiterUrl: cfg.JUPITER_URL, pumpportalUrl: cfg.PUMPPORTAL_URL, priorityLamports: cfg.PRIORITY_FEE_LAMPORTS }),
+          market,
+          (chat, html, buttons) => tide.notify(chat, html, buttons),
+          { masterSeed: cfg.TRADE_MASTER_SEED, maxTradeSol: cfg.MAX_TRADE_SOL, dailySolCap: cfg.DAILY_SOL_CAP, slippageBps: cfg.TRADE_SLIPPAGE_BPS },
+        )
+      : undefined;
+  tide.desk = desk ?? null;
+  log.info(`trading: ${desk ? `on (max ${cfg.MAX_TRADE_SOL} sol a trade)` : "off (set TRADE_MASTER_SEED to switch it on)"}`);
+
   const bot = createBot(cfg.TELEGRAM_BOT_TOKEN, tide, {
     adminIds: cfg.ADMIN_TELEGRAM_IDS,
     runDoctor: (wallets) => runChecks(cfg, wallets, { market }),
     companion,
+    desk,
+    market,
   });
   await bot.api.setMyCommands([
     { command: "start", description: "start, or see what i'm watching" },
@@ -73,6 +94,9 @@ async function main() {
     { command: "alerts", description: "pause me, or pick sui, solana or both" },
     { command: "launches", description: "ping me on brand-new token launches" },
     { command: "lowcaps", description: "small caps with real buyers right now" },
+    { command: "trade", description: "your solana trading wallet" },
+    { command: "positions", description: "what you hold in the trading wallet" },
+    { command: "snipe", description: "your sniper rules, auto-buy on or off" },
     { command: "mcap", description: "only send tokens in a market cap range" },
     { command: "pumped", description: "skip tokens that already ran" },
     { command: "volume", description: "dex volume on sui and solana today" },
@@ -136,7 +160,18 @@ async function main() {
     }
     const shared = store.outcomeSources();
     if (shared.history + shared.live < 20) setTimeout(backfill, 60_000);
+    // Follow live prices for open snipes again, now that positions are back.
+    desk?.resumeLive();
   })();
+
+  if (desk) {
+    cron.schedule("* * * * *", guard("exits", () => desk.checkExits()), tz);
+    if (cfg.SNIPER === "on") {
+      const stream = new PumpStream(cfg.PUMPPORTAL_WS, (l) => void desk.onLaunch(l).catch((err) => log.warn("snipe check failed:", err instanceof Error ? err.message : err)));
+      desk.stream = stream;
+      stream.start();
+    }
+  }
 
   let runner: RunnerHandle | undefined;
   const stop = async () => {

@@ -47,7 +47,21 @@ const schema = z.object({
 
   DATABASE_PATH: z.string().default("./data/tide.db"),
 
-  SCAN_INTERVAL_MINUTES: z.coerce.number().int().positive().default(5),
+  SCAN_INTERVAL_MINUTES: z.coerce.number().int().positive().default(1),
+  /** Secret every user's trading wallet is derived from (32+ characters). Trading is off without it. Never change or lose it. */
+  TRADE_MASTER_SEED: z.string().min(32).optional(),
+  /** Largest single trade in SOL. */
+  MAX_TRADE_SOL: z.coerce.number().positive().default(1),
+  /** Default 24h spending limit per user in SOL (users can change theirs). */
+  DAILY_SOL_CAP: z.coerce.number().positive().default(2),
+  TRADE_SLIPPAGE_BPS: z.coerce.number().int().positive().default(1500),
+  /** Max priority fee per trade in lamports. */
+  PRIORITY_FEE_LAMPORTS: z.coerce.number().int().nonnegative().default(300000),
+  JUPITER_URL: z.string().url().default("https://lite-api.jup.ag/swap/v1"),
+  PUMPPORTAL_URL: z.string().url().default("https://pumpportal.fun/api"),
+  PUMPPORTAL_WS: z.string().default("wss://pumpportal.fun/api/data"),
+  /** "off" disables the live launch stream (one-tap buys still work). */
+  SNIPER: z.enum(["on", "off"]).default("on"),
   /** One alert per chain per person at most this often. */
   ALERT_GAP_MINUTES: z.coerce.number().int().positive().default(45),
   WALLET_CHECK_INTERVAL_MINUTES: z.coerce.number().int().positive().default(30),
