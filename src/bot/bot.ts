@@ -12,6 +12,9 @@ import { assessRisk } from "../core/spike.js";
 import { describeCapRange } from "../core/filters.js";
 import type { Pool } from "../core/types.js";
 import { amounts, parseIntent, type Intent } from "./intents.js";
+import { parseTradeIntent, registerTrading } from "./trading.js";
+import type { TradeDesk } from "../trade/desk.js";
+import type { Market } from "../market/gecko.js";
 
 const HELP = [
   "i'm <b>tide</b>. i watch sui and solana for tokens that start moving, keep track of what you buy and why, and get stricter with you when your calls go bad. you can just talk to me too, or ask me about any token.",
@@ -96,10 +99,13 @@ export interface BotOptions {
   adminIds: number[];
   runDoctor?: (wallets: { sui?: string | null; solana?: string | null }) => Promise<CheckResult[]>;
   companion?: Companion;
+  /** Trading wallet, buys, sells and the sniper (Solana). */
+  desk?: TradeDesk;
+  market?: Market;
 }
 
 export function createBot(token: string, tide: Tide, opts: BotOptions): Bot {
-  const { adminIds, runDoctor, companion } = opts;
+  const { adminIds, runDoctor, companion, desk } = opts;
   const bot = new Bot(token);
   const awaitingBudget = new Set<number>();
   // Updates run concurrently across chats; one chat's messages stay in order.
@@ -161,7 +167,7 @@ export function createBot(token: string, tide: Tide, opts: BotOptions): Bot {
       ].join("\n"),
       dmButton(),
     );
-  const PERSONAL_COMMANDS = new Set(["wallet", "budget", "share", "holdings", "check", "scan", "alerts", "launches", "mcap", "pumped", "memory", "doctor", "backfill", "rebuild"]);
+  const PERSONAL_COMMANDS = new Set(["wallet", "budget", "share", "holdings", "check", "scan", "alerts", "launches", "mcap", "pumped", "memory", "doctor", "backfill", "rebuild", "trade", "buy", "sell", "positions", "withdraw", "export", "snipe"]);
 
   bot.on("my_chat_member", async (ctx) => {
     const was = ctx.myChatMember.old_chat_member.status;
@@ -598,8 +604,14 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
     if (user) await tide.askNextReason(user);
   });
 
+  const trading = desk && opts.market ? registerTrading(bot, { desk, market: opts.market, reply, background, ensureUser, inGroup, toPrivate }) : null;
+
   bot.on("message:text", async (ctx) => {
-    if (inGroup(ctx)) return groupText(ctx);
+    if (inGroup(ctx)) {
+      // Trading is personal: send it to a private chat instead of answering in the group.
+      if (trading && parseTradeIntent(ctx.message.text.replace(new RegExp(`@${bot.botInfo.username}\\b`, "gi"), "").replace(/^\s*(hey\s+)?tide[,\s]+/i, "").trim()) && /@|tide/i.test(ctx.message.text)) return toPrivate(ctx);
+      return groupText(ctx);
+    }
     const user = ensureUser(ctx);
     const text = ctx.message.text.trim();
     if (text.startsWith("/")) return;
@@ -615,6 +627,10 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
       if (!QUESTION.test(text)) return reply(ctx, "just the number is fine, like <code>30</code>.");
       awaitingBudget.delete(user.id);
     }
+
+    // Trading in plain words: "buy 0.1 sol of $WIF", "sell all BONK", "snipe under 20k mcap".
+    const trade = trading ? parseTradeIntent(text) : null;
+    if (trade) return trading!.run(ctx, trade);
 
     const wallet = parseWallet(text);
     // A pasted Solana token address is a question about that token, not a wallet.

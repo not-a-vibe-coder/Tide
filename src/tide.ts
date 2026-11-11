@@ -128,7 +128,8 @@ export class Tide {
     return this.names.get(userId);
   }
 
-  private async notify(chatId: number, html: string, buttons?: Button[][]) {
+  /** Send a message to a chat (used by the trading desk too). */
+  async notify(chatId: number, html: string, buttons?: Button[][]) {
     if (!this.notifier) return;
     try {
       await this.notifier.send(chatId, html, buttons);
@@ -139,6 +140,8 @@ export class Tide {
 
   // ---- onboarding -------------------------------------------------------
 
+  /** Trading desk, when trading is switched on: adds one-tap buy buttons to Solana alerts. */
+  desk: { enabled: boolean; acknowledged(userId: number): boolean; buyButtons(userId: number, mint: string): Button[] } | null = null;
   /** Gap between alerts on the same chain for one user. */
   alertGapMs = 45 * 60_000;
   /** Whole-chain volume source (DefiLlama). */
@@ -510,13 +513,16 @@ export class Tide {
       reasons: spike.reasons,
       kind: spike.kind ?? "spike",
     });
-    await this.notify(user.chatId, alertMessage(spike, risk, sizing, sharedNote), [
+    const buttons: Button[][] = [
       [
         { text: "bought", data: `act:bought:${alertId}` },
         { text: "skipped", data: `act:skipped:${alertId}` },
         { text: "not for me", data: `act:not_for_me:${alertId}` },
       ],
-    ]);
+    ];
+    // Solana alerts get one-tap buys from the user's Tide trading wallet.
+    if (spike.pool.chain === "solana" && this.desk?.enabled && this.desk.acknowledged(user.id)) buttons.unshift(this.desk.buyButtons(user.id, spike.pool.baseCoinType));
+    await this.notify(user.chatId, alertMessage(spike, risk, sizing, sharedNote), buttons);
   }
 
   /** Record what the user did with an alert. "Not for me" mutes that token class. */
