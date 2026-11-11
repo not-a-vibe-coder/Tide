@@ -153,7 +153,8 @@ export class SolanaReader {
     }
   }
 
-  private async rpc<T>(method: string, params: unknown[]): Promise<T> {
+  /** One JSON-RPC call: Tatum first, the fallback endpoint if Tatum refuses. Also used to send trades. */
+  async rpc<T>(method: string, params: unknown[]): Promise<T> {
     const blockedAt = this.tatumBlocked.get(method);
     const tatumOk = !blockedAt || Date.now() - blockedAt > 6 * 60 * 60 * 1000;
     let tatumError: Error | null = null;

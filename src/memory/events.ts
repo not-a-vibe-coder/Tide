@@ -61,7 +61,28 @@ export type EventData =
       kind?: "spike" | "launch" | "mover";
     }
   /** Shared registry of who uses Tide, so a fresh server knows whose memory to restore. */
-  | { type: "user_joined"; telegramId: number };
+  | { type: "user_joined"; telegramId: number }
+  /**
+   * A buy or sell from the user's Tide trading wallet. Amounts are raw integers as strings.
+   * No keys or secrets are ever recorded.
+   */
+  | {
+      type: "trade";
+      side: "buy" | "sell";
+      mint: string;
+      symbol: string;
+      /** SOL spent on a buy, or received on a sell (estimated from the balance change). */
+      lamports: string;
+      tokensRaw: string;
+      decimals: number;
+      signature: string;
+      solUsd: number;
+      source: "manual" | "snipe" | "take_profit" | "stop_loss";
+      /** Market cap in SOL at the time, for pump.fun tokens tracked live. */
+      marketCapSol?: number;
+      tpPct?: number | null;
+      slPct?: number | null;
+    };
 
 export type EventType = EventData["type"];
 
@@ -76,6 +97,7 @@ export const EVENT_TYPES: EventType[] = [
   "preference",
   "token_outcome",
   "user_joined",
+  "trade",
 ];
 
 export interface TideEvent {
@@ -128,6 +150,8 @@ export function describe(e: TideEvent): string {
       return `${who} preference ${d.key} = ${d.value}`;
     case "user_joined":
       return `User ${d.telegramId} uses Tide`;
+    case "trade":
+      return `${who} ${d.side === "buy" ? "bought" : "sold"} ${d.symbol} for ${(Number(d.lamports) / 1e9).toFixed(4)} SOL (${d.source.replace("_", " ")})`;
     case "token_outcome":
       return d.source === "history"
         ? `Market history: ${d.symbol} (${d.tokenClass} token) moved ${d.changePct.toFixed(1)}% in the 24h after a ${d.kind ?? "spike"} signal at ${d.signalAt ?? "unknown time"}`

@@ -18,16 +18,20 @@
     "@mysten-incubation/memwal": "^0.1.12",
     "@mysten/sui": "^2.38.0",
     "@protobuf-ts/grpc-transport": "^2.11.1",
+    "@solana/web3.js": "^1.99.0",
     "better-sqlite3": "^13.0.3",
+    "bs58": "^6.0.0",
     "dotenv": "^18.0.9",
     "grammy": "^1.46.0",
     "node-cron": "^4.6.0",
+    "ws": "^8.22.2",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.6.6",
     "@types/node-cron": "^3.0.11",
+    "@types/ws": "^8.18.2",
     "tsx": "^4.23.15",
     "typescript": "^6.0.3",
     "vitest": "^5.1.0"

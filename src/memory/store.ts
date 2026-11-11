@@ -44,6 +44,21 @@ export interface Alert {
   changePct: number | null;
 }
 
+export interface PositionRow {
+  user_id: number;
+  mint: string;
+  symbol: string;
+  tokens_raw: string;
+  decimals: number;
+  cost_lamports: string;
+  cost_usd: number;
+  opened_at: string;
+  source: string;
+  entry_mcap_sol: number | null;
+  tp_pct: number | null;
+  sl_pct: number | null;
+}
+
 export type MemoryStatus = "queued" | "confirmed" | "failed" | "dry_run";
 
 const SCHEMA = `
@@ -84,12 +99,22 @@ CREATE TABLE IF NOT EXISTS pending_reasons (
 CREATE TABLE IF NOT EXISTS pool_cooldown (
   pool_address TEXT PRIMARY KEY, alerted_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS trades (
+  id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, side TEXT NOT NULL, mint TEXT NOT NULL, symbol TEXT NOT NULL,
+  lamports TEXT NOT NULL, tokens_raw TEXT NOT NULL, decimals INTEGER NOT NULL, signature TEXT NOT NULL,
+  sol_usd REAL NOT NULL, source TEXT NOT NULL, at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS positions (
+  user_id INTEGER NOT NULL, mint TEXT NOT NULL, symbol TEXT NOT NULL, tokens_raw TEXT NOT NULL, decimals INTEGER NOT NULL,
+  cost_lamports TEXT NOT NULL, cost_usd REAL NOT NULL, opened_at TEXT NOT NULL, source TEXT NOT NULL,
+  entry_mcap_sol REAL, tp_pct REAL, sl_pct REAL, PRIMARY KEY (user_id, mint)
+);
 CREATE INDEX IF NOT EXISTS holdings_user ON holdings(user_id, closed_at);
 CREATE INDEX IF NOT EXISTS alerts_user ON alerts(user_id, sent_at);
 `;
 
 /** Tables derived purely from events. Wiped and replayed by a rebuild. */
-const DERIVED_TABLES = ["users", "prefs", "holdings", "alerts", "token_outcomes", "pending_reasons", "events"];
+const DERIVED_TABLES = ["users", "prefs", "holdings", "alerts", "token_outcomes", "pending_reasons", "trades", "positions", "events"];
 
 export class Store {
   readonly db: Database.Database;
@@ -176,6 +201,41 @@ export class Store {
           .prepare("INSERT INTO prefs (user_id, key, value) VALUES (?, ?, ?) ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value")
           .run(uid, d.key, d.value);
         break;
+      case "trade": {
+        if (uid === null) break;
+        this.db
+          .prepare(
+            `INSERT OR IGNORE INTO trades (id, user_id, side, mint, symbol, lamports, tokens_raw, decimals, signature, sol_usd, source, at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(e.id, uid, d.side, d.mint, d.symbol, d.lamports, d.tokensRaw, d.decimals, d.signature, d.solUsd, d.source, e.at);
+        const pos = this.db.prepare("SELECT * FROM positions WHERE user_id = ? AND mint = ?").get(uid, d.mint) as PositionRow | undefined;
+        const tokens = BigInt(d.tokensRaw), lamports = BigInt(d.lamports);
+        if (d.side === "buy") {
+          if (pos) {
+            this.db
+              .prepare("UPDATE positions SET tokens_raw = ?, cost_lamports = ?, cost_usd = cost_usd + ? WHERE user_id = ? AND mint = ?")
+              .run((BigInt(pos.tokens_raw) + tokens).toString(), (BigInt(pos.cost_lamports) + lamports).toString(), (Number(lamports) / 1e9) * d.solUsd, uid, d.mint);
+          } else {
+            this.db
+              .prepare(
+                `INSERT INTO positions (user_id, mint, symbol, tokens_raw, decimals, cost_lamports, cost_usd, opened_at, source, entry_mcap_sol, tp_pct, sl_pct)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              )
+              .run(uid, d.mint, d.symbol, d.tokensRaw, d.decimals, d.lamports, (Number(lamports) / 1e9) * d.solUsd, e.at, d.source, d.marketCapSol ?? null, d.tpPct ?? null, d.slPct ?? null);
+          }
+        } else if (pos) {
+          const held = BigInt(pos.tokens_raw), left = held > tokens ? held - tokens : 0n;
+          if (left === 0n) this.db.prepare("DELETE FROM positions WHERE user_id = ? AND mint = ?").run(uid, d.mint);
+          else {
+            const keep = Number(left) / Number(held);
+            this.db
+              .prepare("UPDATE positions SET tokens_raw = ?, cost_lamports = ?, cost_usd = cost_usd * ? WHERE user_id = ? AND mint = ?")
+              .run(left.toString(), BigInt(Math.round(Number(pos.cost_lamports) * keep)).toString(), keep, uid, d.mint);
+          }
+        }
+        break;
+      }
       case "token_outcome":
         this.db
           .prepare("INSERT OR IGNORE INTO token_outcomes (id, coin_type, token_class, change_pct, at, source) VALUES (?, ?, ?, ?, ?, ?)")
@@ -270,7 +330,11 @@ export class Store {
     const r = this.db
       .prepare("SELECT COALESCE(SUM(cost_usd), 0) s FROM holdings WHERE user_id = ? AND bought_at >= ?")
       .get(userId, since.toISOString()) as { s: number };
-    return r.s;
+    // Buys from the Tide trading wallet count against the weekly budget too.
+    const t = this.db
+      .prepare("SELECT COALESCE(SUM(CAST(lamports AS REAL) / 1e9 * sol_usd), 0) s FROM trades WHERE user_id = ? AND side = 'buy' AND at >= ?")
+      .get(userId, since.toISOString()) as { s: number };
+    return r.s + t.s;
   }
 
   addPendingReason(holdingId: string, userId: number) {
@@ -379,6 +443,35 @@ export class Store {
   /** Every event in the local cache, including ones not on Walrus yet. */
   allEvents(): TideEvent[] {
     return (this.db.prepare("SELECT json FROM events").all() as { json: string }[]).map((r) => JSON.parse(r.json) as TideEvent);
+  }
+
+  // ---- trading ----------------------------------------------------------
+
+  positions(userId: number): PositionRow[] {
+    return this.db.prepare("SELECT * FROM positions WHERE user_id = ? ORDER BY opened_at").all(userId) as PositionRow[];
+  }
+
+  position(userId: number, mint: string): PositionRow | null {
+    return (this.db.prepare("SELECT * FROM positions WHERE user_id = ? AND mint = ?").get(userId, mint) as PositionRow | undefined) ?? null;
+  }
+
+  allPositions(): PositionRow[] {
+    return this.db.prepare("SELECT * FROM positions").all() as PositionRow[];
+  }
+
+  /** Lamports this user spent on trading-wallet buys since a time. */
+  lamportsSpentSince(userId: number, since: Date): bigint {
+    const rows = this.db.prepare("SELECT lamports FROM trades WHERE user_id = ? AND side = 'buy' AND at >= ?").all(userId, since.toISOString()) as { lamports: string }[];
+    return rows.reduce((a, r) => a + BigInt(r.lamports), 0n);
+  }
+
+  countTrades(userId: number, since: Date, source: string): number {
+    return (this.db.prepare("SELECT COUNT(*) n FROM trades WHERE user_id = ? AND side = 'buy' AND source = ? AND at >= ?").get(userId, source, since.toISOString()) as { n: number }).n;
+  }
+
+  /** Users with a preference set to a value (e.g. snipe_auto = true). */
+  usersWithPref(key: string, value: string): number[] {
+    return (this.db.prepare("SELECT user_id FROM prefs WHERE key = ? AND value = ?").all(key, value) as { user_id: number }[]).map((r) => r.user_id);
   }
 
   allUserIds(): number[] {
