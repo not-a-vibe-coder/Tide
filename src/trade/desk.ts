@@ -66,8 +66,8 @@ export class TradeDesk {
   snipesSeen = 0;
 
   constructor(
-    private readonly store: Store,
-    private readonly memory: Memory,
+    readonly store: Store,
+    readonly memory: Memory,
     private readonly trader: TraderLike,
     private readonly market: Pick<Market, "quote" | "symbol">,
     private readonly notify: Notify,

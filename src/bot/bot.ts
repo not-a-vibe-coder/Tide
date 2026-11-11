@@ -52,7 +52,9 @@ export function welcome(firstName?: string): string {
     "🔎 <b>ask me anything.</b> \"why shouldn't i buy $WIF?\", \"top 5 on solana\", \"find me low caps under 50k\", \"how much volume is on sui\". just talk normally, pidgin is fine too.",
     "🎯 <b>you set the rules.</b> say \"only send tokens under 100k mcap\", \"turn on launch alerts\" or \"only solana\" and i'll stick to it.",
     "",
-    "to start, paste your <b>sui or solana wallet address</b>. i only read public data, i'll never ask for your keys or to sign anything.",
+    "⚡ <b>i can trade and snipe for you.</b> open /trade for a separate solana trading wallet: one-tap buys on alerts, take profit and stop loss, and a sniper that follows your rules on new pump.fun launches.",
+    "",
+    "to start, paste your <b>sui or solana wallet address</b> to track it. i only read that one, i'll never ask for its keys.",
     "",
     "<i>nothing i say is financial advice. most new tokens go to zero, so only use money you can lose.</i>",
   ].join("\n");
@@ -539,6 +541,10 @@ you can paste a ${CHAIN_LABEL[other]} wallet too, i'll watch both.` : "";
       const lines = results.map((r) => `${r.ok ? "✅" : "❌"} <b>${esc(r.name)}</b>: ${esc(r.detail)}`);
       if (ai) lines.push(ai);
       lines.push(`📦 <b>Storage</b>: ${esc(tide.storageReport())}`);
+      if (desk) {
+        const s = desk.stream;
+        lines.push(`🎯 <b>Trading</b>: on · sniper stream ${s ? (s.connected ? `connected, ${s.launches} launches seen` : "reconnecting") : "off"} · ${desk.store.allPositions().length} open positions`);
+      } else lines.push("🎯 <b>Trading</b>: off (no TRADE_MASTER_SEED)");
       await reply(ctx, lines.join("\n"));
     });
   });

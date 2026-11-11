@@ -213,7 +213,7 @@ describe("welcome", () => {
     await say("/start");
     const msg = sent.at(-1)!;
     expect(msg).toBe(welcome("Pascal"));
-    for (const bit of ["find tokens as they start moving", "red flags", "how much i'd risk", "remember why you bought", "low caps", "only send tokens under 100k mcap", "wallet address", "never ask for your keys"]) {
+    for (const bit of ["find tokens as they start moving", "red flags", "how much i'd risk", "remember why you bought", "low caps", "only send tokens under 100k mcap", "wallet address", "never ask for its keys", "/trade"]) {
       expect(msg).toContain(bit);
     }
     expect(msg).not.toMatch(/[—–]|walrus|namespace/i);

@@ -8,7 +8,7 @@ A Telegram bot that spots Sui and Solana tokens gaining momentum, tracks how you
 
 Built for the [Walrus × Tatum Total Recall](https://recall-tatum-walrus.vercel.app/) hackathon, Markets & Sports Prediction track.
 
-> Not financial advice. Tide suggests a risk ceiling, never a trade. It only reads public chain data and never asks for keys or signatures.
+> Not financial advice. Tide never trades on its own judgment: it suggests a risk ceiling, and only buys or sells on your words, your taps, or sniper rules you set. The wallets you track stay read-only; trading happens from a separate Tide trading wallet.
 
 ## How it works
 
@@ -117,6 +117,19 @@ You don't need them. Plain words work for every setting and action, in English o
 | `/doctor` | Check Telegram, Tatum, GeckoTerminal and a real Walrus write (admin only; non-admins see their Telegram ID) |
 | `/backfill` | Replay a week of market history into shared memory (admin only) |
 | `/rebuild` | Wipe test (admin only) |
+
+### Trading and sniping (Solana)
+
+Set `TRADE_MASTER_SEED` and every user can open `/trade` for a separate **Tide trading wallet**. They see the risks first and have to accept them before the wallet exists.
+
+- **Wallets are derived, not stored.** Each wallet comes from `TRADE_MASTER_SEED` + the user's Telegram id + a wallet number (HKDF-SHA256 → ed25519). Render's free plan wipes the disk on every deploy, so a stored key would vanish with the funds; a derived one comes back every time. **Back the seed up offline and never change it:** losing it loses every wallet, and leaking it exposes every wallet. Users can `/export` their key at any time (sent hidden, deleted after 60 seconds).
+- **Buys and sells** go through Jupiter for anything routable, and PumpPortal for tokens still on a pump.fun bonding curve. Transactions are signed in the bot and sent through Tatum's Solana RPC. Every Solana alert gets one-tap buy buttons, and `buy 0.1 sol of $WIF`, `sell 50% of WIF`, `/positions` and `withdraw all to ADDRESS` all work in plain words.
+- **Limits:** `MAX_TRADE_SOL` per trade and a 24h limit (`DAILY_SOL_CAP`, changeable per user with `daily limit 2 sol`). Trading-wallet buys also count against the weekly budget.
+- **Take profit / stop loss:** `take profit at 100%`, `stop loss at 40%`. Checked every minute, and within seconds for pump.fun tokens followed on the live stream.
+- **Sniper:** PumpPortal's free live stream reports every new pump.fun token as it's created. Each user's rules decide what happens: sol per snipe, market cap range, how much the creator holds, how many distinct buyers in the first seconds (and more buys than sells), snipes per day, and exits. Auto-buy is off until they turn it on; `snipe launch alerts on` sends matching launches with buy buttons instead (at most 6 an hour).
+- **Walrus:** every trade is an event on Walrus Memory (side, token, amounts, signature, source), so positions and the budget rebuild after a wipe. No key or secret is ever written anywhere.
+
+Generate a seed with `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`.
 
 ### Your own limits, and market lookups
 
